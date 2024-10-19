@@ -75,7 +75,6 @@ echo "\n ${GREEN}✓${RESET} ${YELLOW}[3/5]${RESET} ${YELLOW}Node.js 업데이�
 echo "\n------------------------------------------------\n"
 echo " ${BLUE}↺${RESET} ${YELLOW}[4/5] npm 업데이트 실행중...${RESET}"
 npm i -g npm@latest
-echo "PATH: $PATH"
 echo "\n ${GREEN}✓${RESET} ${YELLOW}[4/5]${RESET} ${YELLOW}npm 업데이트 루틴 완료!${RESET}"
 
 echo "\n------------------------------------------------\n"
