@@ -61,6 +61,7 @@ fi
 
 - 루틴 진행 이후, npm 인식이 되지 않는 경우, nvm 에서 해당 버전을 재설치한다.
 - update.sh로 설치하는 이유는, 글로벌 패키지까지 한번에 설치하고 루틴 정상화 테크역할까지 겸할 수 있기 때문.
+- npm 글로벌 업데이트 시, `nvm install-latest-npm`를 실행하여 처리한다.
 
 ```bash
 nvm uninstall XX.XX.XX
