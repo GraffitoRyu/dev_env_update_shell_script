@@ -52,19 +52,17 @@ echo ""
 # Node.js 버전이 최신이 아닐 경우 업데이트 수행
 if [ "$LATEST_NODE_VERSION" != "$CURRENT_NODE_VERSION" ]; then
   echo "${BOLD}${RED}Node.js가 최신 버전이 아닙니다. 업데이트를 진행합니다...${RESET}"
-  echo "\n- (1/6) Node.js $LATEST_NODE_VERSION 설치중..."
+  echo "\n- (1/5) Node.js $LATEST_NODE_VERSION 설치중..."
   nvm install $LATEST_NODE_VERSION
-  echo "\n- (2/6) Node.js $LATEST_NODE_VERSION 활성화중..."
+  echo "\n- (2/5) Node.js $LATEST_NODE_VERSION 활성화중..."
   nvm use $LATEST_NODE_VERSION
   hash -rs
-  echo "\n- (3/6) Node.js $LATEST_NODE_VERSION 버전을 기본 버전으로 설정중..."
+  echo "\n- (3/5) Node.js $LATEST_NODE_VERSION 버전을 기본 버전으로 설정중..."
   nvm alias default $LATEST_NODE_VERSION
   echo "\n${BOLD}${RED}Node.js가 업데이트되었습니다:${RESET} ${BOLD}${YELLOW}$(node -v)${RESET}"
-  echo "\n- (4/6) vite 글로벌 패키지 설치중..."
+  echo "\n- (4/5) vite 글로벌 패키지 설치중..."
   npm i -g vite@latest
-  echo "\n- (5/6) pnpm 글로벌 패키지 설치중..."
-  npm i -g pnpm@latest
-  echo "\n- (6/6) http-server 글로벌 패키지 설치중..."
+  echo "\n- (5/5) http-server 글로벌 패키지 설치중..."
   npm i -g http-server@latest
 else
   echo "${BOLD}${RED}Node.js가 이미 최신 버전입니다.${RESET}"
