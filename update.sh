@@ -9,7 +9,7 @@ BOLD='\033[1m'
 RESET='\033[0m'  # 리셋 코드
 
 # Node.js LTS 기준 버전
-NODE_LTS_VERSION='20'
+NODE_LTS_VERSION='22'
 
 # 업데이트 루틴 인덱스
 # 1. Homebrew 업데이트
