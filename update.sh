@@ -31,7 +31,8 @@ echo "┖⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯�
 
 # Homebrew 업데이트 및 업그레이드
 echo " ${BLUE}↺${RESET} ${YELLOW}[1/5] Homebrew 업데이트 실행중...${RESET}"
-brew update
+# brew update
+brew update-reset "$(brew --repository)"
 echo " ${GREEN}✓${RESET} ${YELLOW}[1/5]${RESET} ${YELLOW}Homebrew 업데이트 루틴 완료!${RESET}"
 
 echo "\n------------------------------------------------\n"
