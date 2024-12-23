@@ -37,19 +37,21 @@ eval "$(pyenv init -)"
 
 
 # 업데이트 루틴 스크립트 자동 실행 설정
+UPDATE_DIR="$HOME/projects/shell-update"
 # 플래그 파일 경로 설정
-UPDATE_FLAG="$HOME/.update_ran"
+UPDATE_FLAG="$UPDATE_DIR/.date-cache"
+LAST_UPDATE="$UPDATE_DIR/.latest-date"
 
 # 매일 자정 플래그 파일 초기화
-if [[ $(date +%F) != $(cat $HOME/.update_last_run 2>/dev/null) ]]; then
+if [[ $(date +%F) != $(cat $LAST_UPDATE 2>/dev/null) ]]; then
   rm -f "$UPDATE_FLAG"  # 플래그 파일 제거
-  date +%F > $HOME/.update_last_run  # 마지막 실행 날짜 업데이트
+  date +%F > $LAST_UPDATE  # 마지막 실행 날짜 업데이트
 fi
 
 # 플래그 파일이 없을 경우에만 업데이트 스크립트를 실행
 if [ ! -f "$UPDATE_FLAG" ]; then
   echo "[업데이트 루틴 실행]"
-  source ~/projects/update_env/update.sh  # 스크립트를 첫 실행에만 실행하도록 설정
+  source $UPDATE_DIR/update.sh  # 스크립트를 첫 실행에만 실행하도록 설정
   touch "$UPDATE_FLAG"  # 플래그 파일 생성
 fi
 
