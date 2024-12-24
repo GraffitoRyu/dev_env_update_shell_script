@@ -2,8 +2,9 @@
 
 매일 iTerm 첫 실행 시 동작하도록 구성된 셸 스크립트
 
+- MacOS 환경 기준
 - 개발도구의 최신화 유지 목적
-- zsh 환경에서 실행되도록 구성
+- Homebrew 및 zsh 환경에서 실행되도록 구성
 
 ## 1. 동작환경
 
@@ -20,7 +21,17 @@
 - vite
 - npm-check-update
 
-## 3. .zshrc
+## 3. 파일 생성
+
+- 개발환경 첫 셋업 시, `homebrew`로 설치되는 루트 폴더에 `.nvm` 폴더 생성할 것.
+- 프로젝트 폴더에 아래의 파일 생성할 것.
+
+```plaintext
+.date-cache
+.latest-date
+```
+
+## 4. .zshrc
 
 ```bash
 # ...앞 내용 생략
@@ -37,7 +48,7 @@ eval "$(pyenv init -)"
 
 
 # 업데이트 루틴 스크립트 자동 실행 설정
-UPDATE_DIR="$HOME/projects/shell-update"
+UPDATE_DIR="$HOME/{프로젝트 폴더 경로}"
 # 플래그 파일 경로 설정
 UPDATE_FLAG="$UPDATE_DIR/.date-cache"
 LAST_UPDATE="$UPDATE_DIR/.latest-date"
@@ -57,7 +68,7 @@ fi
 
 ```
 
-## 4. 오류발생 대처
+## 5. 오류발생 대처
 
 ### npm 인식 오류
 
@@ -67,5 +78,5 @@ fi
 
 ```bash
 nvm uninstall XX.XX.XX
-source ~/projects/update_env/update.sh
+source ~/{경로}/update.sh
 ```
