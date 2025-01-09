@@ -10,7 +10,7 @@ RESET='\033[0m'  # 리셋 코드
 
 # Node.js LTS 기준 버전
 # v22는 punycode deprecation 오류가 발생하므로, v20 버전을 사용한다
-NODE_LTS_VERSION='20'
+NODE_LTS_VERSION='22'
 
 # 업데이트 루틴 인덱스
 # 1. Homebrew 업데이트
