@@ -1,4 +1,8 @@
 #!/usr/bin/env zsh
+set -euo pipefail
+export NVM_DIR="$HOME/.nvm"
+[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
 
 # 색상 코드 설정
 RED='\033[31m'
@@ -9,7 +13,6 @@ BOLD='\033[1m'
 RESET='\033[0m'  # 리셋 코드
 
 # Node.js LTS 기준 버전
-# v22는 punycode deprecation 오류가 발생하므로, v20 버전을 사용한다
 NODE_LTS_VERSION='24'
 
 # 업데이트 루틴 인덱스
