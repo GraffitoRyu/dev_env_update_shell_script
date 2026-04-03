@@ -1,8 +1,54 @@
 #!/usr/bin/env zsh
 set -euo pipefail
+setopt ERR_RETURN
+
 export NVM_DIR="$HOME/.nvm"
 [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
 [ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
+
+SCRIPT_DIR="${0:A:h}"
+LOG_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOG_DIR"
+RUN_AT="$(date '+%Y-%m-%d_%H-%M-%S')"
+LOG_FILE="$LOG_DIR/update-$RUN_AT.log"
+
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+keep_shell_open() {
+  if [[ -o interactive ]]; then
+    return
+  fi
+
+  if [[ -t 0 ]]; then
+    echo ""
+    echo "Enter를 누르면 interactive zsh로 전환합니다..."
+    read "reply?"
+    exec zsh -i
+  fi
+}
+
+on_error() {
+  local exit_code=$?
+  local line_no=${1:-unknown}
+  local failed_command=${2:-unknown}
+  echo ""
+  echo "${BOLD}${RED}[ERROR]${RESET} 업데이트 루틴이 실패했습니다."
+  echo "- exit code: $exit_code"
+  echo "- line: $line_no"
+  echo "- command: $failed_command"
+  echo "- log file: $LOG_FILE"
+  keep_shell_open
+  exit $exit_code
+}
+
+on_exit() {
+  local exit_code=$?
+  if [[ $exit_code -eq 0 ]]; then
+    echo ""
+    echo "- log file: $LOG_FILE"
+    keep_shell_open
+  fi
+}
 
 # 색상 코드 설정
 RED='\033[31m'
@@ -11,6 +57,9 @@ YELLOW='\033[33m'
 BLUE='\033[34m'
 BOLD='\033[1m'
 RESET='\033[0m'  # 리셋 코드
+
+trap 'on_error ${LINENO} "${funcstack[1]:-main}"' ERR
+trap 'on_exit' EXIT
 
 # Node.js LTS 기준 버전
 NODE_LTS_VERSION='24'
@@ -30,6 +79,7 @@ NODE_LTS_VERSION='24'
 
 echo "\n┎⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯┒"
 echo "┃        ✨ ${BOLD}${YELLOW}업데이트 루틴을 실행합니다!${RESET}        ┃"
+echo "┃   log: $LOG_FILE"
 echo "┖⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯┚\n"
 
 # Homebrew 업데이트 및 업그레이드
@@ -61,13 +111,15 @@ if [ "$LATEST_NODE_VERSION" != "$CURRENT_NODE_VERSION" ]; then
   nvm install $LATEST_NODE_VERSION
   echo "\n- (2/5) Node.js $LATEST_NODE_VERSION 활성화중..."
   nvm use $LATEST_NODE_VERSION
-  hash -rs
+  rehash
   echo "\n- (3/5) Node.js $LATEST_NODE_VERSION 버전을 기본 버전으로 설정중..."
   nvm alias default $LATEST_NODE_VERSION
   echo "\n${BOLD}${RED}Node.js가 업데이트되었습니다:${RESET} ${BOLD}${YELLOW}$(node -v)${RESET}"
-  echo "\n- (4/5) vite 글로벌 패키지 설치중..."
+  echo "\n- (4/6) vite 글로벌 패키지 설치중..."
   npm i -g vite@latest
-  echo "\n- (5/5) http-server 글로벌 패키지 설치중..."
+  echo "\n- (5/6) pnpm 글로벌 패키지 설치중..."
+  npm i -g pnpm@latest
+  echo "\n- (6/6) http-server 글로벌 패키지 설치중..."
   npm i -g http-server@latest
 else
   echo "${BOLD}${RED}Node.js가 이미 최신 버전입니다.${RESET}"
@@ -77,7 +129,20 @@ echo "\n ${GREEN}✓${RESET} ${YELLOW}[3/5]${RESET} ${YELLOW}Node.js 업데이�
 # npm과 npm-check-updates 최신 버전으로 설치
 echo "\n------------------------------------------------\n"
 echo " ${BLUE}↺${RESET} ${YELLOW}[4/5] npm 업데이트 실행중...${RESET}"
-nvm install-latest-npm
+echo "- node path: $(command -v node || echo 'not found')"
+echo "- npm path: $(command -v npm || echo 'not found')"
+echo "- nvm path: $(command -v nvm || echo 'not found')"
+echo "- node version: $(node -v 2>/dev/null || echo 'unavailable')"
+echo "- npm version(before): $(npm -v 2>/dev/null || echo 'unavailable')"
+if ! nvm install-latest-npm; then
+  echo "${BOLD}${RED}[ERROR]${RESET} npm 업데이트에 실패했습니다."
+  echo "- reason: nvm install-latest-npm failed"
+  echo "- log file: $LOG_FILE"
+  keep_shell_open
+  exit 1
+fi
+rehash
+echo "- npm version(after): $(npm -v 2>/dev/null || echo 'unavailable')"
 echo "\n ${GREEN}✓${RESET} ${YELLOW}[4/5]${RESET} ${YELLOW}npm 업데이트 루틴 완료!${RESET}"
 
 echo "\n------------------------------------------------\n"
