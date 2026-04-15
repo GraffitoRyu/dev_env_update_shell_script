@@ -121,6 +121,7 @@ main() {
       echo ""
       echo "- (3/6) Node.js $latest_node_version 버전을 기본 버전으로 설정중..."
       nvm alias default "$latest_node_version"
+      current_node_version="$(node -v)"
       echo ""
       echo "${BOLD}${RED}Node.js가 업데이트되었습니다:${RESET} ${BOLD}${YELLOW}$(node -v)${RESET}"
       echo ""
@@ -143,25 +144,39 @@ main() {
     echo "------------------------------------------------"
     echo ""
 
-    echo " ${BLUE}↺${RESET} ${YELLOW}[4/5] npm 업데이트 실행중...${RESET}"
-    echo "- node path: $(command -v node || echo 'not found')"
-    echo "- npm path: $(command -v npm || echo 'not found')"
-    echo "- nvm path: $(command -v nvm || echo 'not found')"
-    echo "- node version: $(node -v 2>/dev/null || echo 'unavailable')"
-    echo "- npm version(before): $(npm -v 2>/dev/null || echo 'unavailable')"
+    echo " ${BLUE}↺${RESET} ${YELLOW}[4/5] npm 상태 점검중...${RESET}"
 
-    if ! nvm install-latest-npm; then
-      echo "${BOLD}${RED}[ERROR]${RESET} npm 업데이트에 실패했습니다."
-      echo "- reason: nvm install-latest-npm failed"
+    local npm_path
+    local npm_version
+
+    npm_path="$(command -v npm || true)"
+    npm_version="$(npm -v 2>/dev/null || true)"
+
+    echo "- node path: $(command -v node || echo 'not found')"
+    echo "- npm path: ${npm_path:-not found}"
+    echo "- node version: $(node -v 2>/dev/null || echo 'unavailable')"
+    echo "- npm version: ${npm_version:-unavailable}"
+
+    if [[ -z "$npm_path" ]]; then
+      echo "${BOLD}${RED}[ERROR]${RESET} 현재 활성 Node.js 설치에서 npm을 찾을 수 없습니다."
+      echo "- 자동 복구는 중단합니다. 손상된 nvm 설치를 스크립트에서 계속 건드리면 문제가 커질 수 있습니다."
+      echo "- 아래 명령을 터미널에서 1회 수동 실행한 뒤 다시 update.sh를 실행하세요."
+      echo ""
+      echo "  nvm deactivate"
+      echo "  nvm uninstall $current_node_version"
+      echo "  nvm cache clear"
+      echo "  nvm install $current_node_version"
+      echo "  nvm use $current_node_version"
+      echo "  nvm alias default $current_node_version"
+      echo ""
       echo "- log file: $log_file"
       keep_shell_open
       return 1
     fi
 
-    rehash
-    echo "- npm version(after): $(npm -v 2>/dev/null || echo 'unavailable')"
+    echo "- npm 상태가 정상입니다. 별도 npm self-update 단계는 건너뜁니다."
     echo ""
-    echo " ${GREEN}✓${RESET} ${YELLOW}[4/5]${RESET} ${YELLOW}npm 업데이트 루틴 완료!${RESET}"
+    echo " ${GREEN}✓${RESET} ${YELLOW}[4/5]${RESET} ${YELLOW}npm 상태 점검 루틴 완료!${RESET}"
 
     echo ""
     echo "------------------------------------------------"
