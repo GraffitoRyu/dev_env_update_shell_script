@@ -22,7 +22,14 @@ main() {
   fi
   local script_dir="${script_path:A:h}"
   local log_dir="$script_dir/logs"
+  local lock_dir="$log_dir/.update.lock"
   mkdir -p "$log_dir"
+
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    echo "[SKIP] update.sh is already running: $lock_dir"
+    return 0
+  fi
+  trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
 
   local run_at
   run_at="$(date '+%Y-%m-%d_%H-%M-%S')"
