@@ -29,7 +29,6 @@ main() {
     echo "[SKIP] update.sh is already running: $lock_dir"
     return 0
   fi
-
   trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
 
   local run_at
