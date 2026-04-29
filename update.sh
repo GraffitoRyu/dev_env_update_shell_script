@@ -23,13 +23,55 @@ main() {
   local script_dir="${script_path:A:h}"
   local log_dir="$script_dir/logs"
   local lock_dir="$log_dir/.update.lock"
+  local current_pid
+  local lock_busy_exit_code=75
   mkdir -p "$log_dir"
 
-  if ! mkdir "$lock_dir" 2>/dev/null; then
-    echo "[SKIP] update.sh is already running: $lock_dir"
-    return 0
+  if zmodload zsh/system 2>/dev/null; then
+    current_pid="$sysparams[pid]"
+  else
+    current_pid="$$"
   fi
-  trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+
+  cleanup_lock() {
+    command rm -f "$lock_dir/pid" "$lock_dir/started_at" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+  }
+
+  acquire_lock() {
+    if mkdir "$lock_dir" 2>/dev/null; then
+      echo "$current_pid" > "$lock_dir/pid"
+      date '+%Y-%m-%d_%H-%M-%S' > "$lock_dir/started_at"
+      return 0
+    fi
+
+    local lock_pid
+    lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+
+    if [[ -n "$lock_pid" && "$lock_pid" == <-> ]] && kill -0 "$lock_pid" 2>/dev/null; then
+      echo "[SKIP] update.sh is already running: $lock_dir (pid: $lock_pid)"
+      return "$lock_busy_exit_code"
+    fi
+
+    echo "[WARN] stale update lock removed: $lock_dir"
+    cleanup_lock
+
+    if mkdir "$lock_dir" 2>/dev/null; then
+      echo "$current_pid" > "$lock_dir/pid"
+      date '+%Y-%m-%d_%H-%M-%S' > "$lock_dir/started_at"
+      return 0
+    fi
+
+    echo "[SKIP] update.sh is already running: $lock_dir"
+    return "$lock_busy_exit_code"
+  }
+
+  acquire_lock
+  local lock_exit_code=$?
+  if (( lock_exit_code != 0 )); then
+    return "$lock_exit_code"
+  fi
+  trap 'cleanup_lock' EXIT INT TERM HUP
 
   local run_at
   run_at="$(date '+%Y-%m-%d_%H-%M-%S')"
@@ -201,6 +243,9 @@ main() {
     echo ""
 
     on_success
+  } always {
+    cleanup_lock
+    trap - EXIT INT TERM HUP
   } > >(tee -a "$log_file") 2>&1
 
   return 0

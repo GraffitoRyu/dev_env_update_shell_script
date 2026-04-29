@@ -70,6 +70,18 @@ fi
 
 ## 5. 오류발생 대처
 
+### update.sh is already running
+
+- `logs/.update.lock`는 숨김 디렉터리라 Finder나 일반 `ls`에서는 비어 있는 것처럼 보일 수 있다.
+- 현재 스크립트는 락 디렉터리에 실행 중인 PID를 기록한다.
+- PID가 없거나 이미 종료된 프로세스의 PID라면 stale lock으로 판단하고 자동 제거한 뒤 다시 실행한다.
+- 실제 실행 중인 PID가 있으면 exit code `75`로 종료한다. 이 경우 `.date-cache`를 생성하면 안 된다.
+- 직접 확인할 때는 아래 명령을 사용한다.
+
+```bash
+ls -la "$HOME/projects/shell-update/logs"
+```
+
 ### npm 인식 오류
 
 - 루틴 진행 이후, npm 인식이 되지 않는 경우, nvm 에서 해당 버전을 재설치한다.
