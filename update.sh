@@ -84,6 +84,12 @@ main() {
   local BOLD='\033[1m'
   local RESET='\033[0m'
   local NODE_LTS_VERSION='24'
+  local RUN_MODE="${1:-manual}"
+  local IS_AUTO_RUN=0
+
+  if [[ "$RUN_MODE" == "--auto" || "${SHELL_UPDATE_AUTO:-0}" == "1" ]]; then
+    IS_AUTO_RUN=1
+  fi
 
   keep_shell_open() {
     if (( IS_SOURCED )) || [[ -o interactive ]]; then
@@ -139,7 +145,21 @@ main() {
     echo ""
 
     echo " ${BLUE}↺${RESET} ${YELLOW}[2/5] Homebrew 패키지 업데이트 실행중...${RESET}"
-    brew upgrade
+
+    if (( IS_AUTO_RUN )); then
+      echo "${BOLD}${YELLOW}[SKIP]${RESET} 자동 실행 모드에서는 Password 프롬프트 방지를 위해 brew upgrade를 건너뜁니다."
+      echo "- 전체 Homebrew 업그레이드가 필요하면 아래 명령을 터미널에서 직접 실행하세요."
+      echo "  zsh $script_path"
+    elif [[ ! -t 0 ]]; then
+      echo "${BOLD}${YELLOW}[SKIP]${RESET} 비대화형 실행 환경에서는 Password 프롬프트 방지를 위해 brew upgrade를 건너뜁니다."
+      echo "- 전체 Homebrew 업그레이드가 필요하면 아래 명령을 터미널에서 직접 실행하세요."
+      echo "  zsh $script_path"
+    else
+      echo "${BOLD}${YELLOW}[INFO]${RESET} Homebrew cask 업데이트 중 macOS 관리자 비밀번호가 필요할 수 있습니다."
+      echo "${BOLD}${YELLOW}[INFO]${RESET} Password 요청이 나오면 이 수동 실행 터미널에서 직접 입력하세요."
+      brew upgrade
+    fi
+
     echo " ${GREEN}✓${RESET} ${YELLOW}[2/5]${RESET} ${YELLOW}Homebrew 패키지 업데이트 루틴 완료!${RESET}"
 
     echo ""
