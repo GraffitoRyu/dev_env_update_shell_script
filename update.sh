@@ -8,18 +8,11 @@ fi
 main() {
   emulate -L zsh -o pipefail -o err_return -o no_unset
   setopt localoptions localtraps
-  local UPDATE_DIR="${HOME}/projects/shell-update"
-
   export NVM_DIR="$HOME/.nvm"
   [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
   [ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
 
-  local script_path
-  if (( IS_SOURCED )); then
-    script_path="$UPDATE_DIR/update.sh"
-  else
-    script_path="${(%):-%N}"
-  fi
+  local script_path="${(%):-%N}"
   local script_dir="${script_path:A:h}"
   local log_dir="$script_dir/logs"
   local lock_dir="$log_dir/.update.lock"

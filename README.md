@@ -79,7 +79,7 @@ fi
 - 직접 확인할 때는 아래 명령을 사용한다.
 
 ```bash
-ls -la "$HOME/projects/shell-update/logs"
+ls -la "$UPDATE_DIR/logs"
 ```
 
 ### npm 인식 오류
