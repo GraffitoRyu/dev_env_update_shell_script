@@ -1,94 +1,105 @@
-# 개발환경 자동화 스크립트
+# macOS 개발환경 업데이트 스크립트
 
-매일 iTerm 첫 실행 시 동작하도록 구성된 셸 스크립트
+Homebrew, Node.js LTS와 npm 글로벌 개발 도구를 한 번에 점검·업데이트하는 zsh 스크립트다.
 
-- MacOS 환경 기준
-- 개발도구의 최신화 유지 목적
-- Homebrew 및 zsh 환경에서 실행되도록 구성
+## 관리 대상
 
-## 1. 동작환경
+- Homebrew와 설치된 formula/cask
+- Homebrew로 설치한 nvm
+- Node.js 24 LTS
+- npm, pnpm, vite, http-server, npm-check-updates
 
+## 실행 조건
+
+- macOS
 - zsh
+- Homebrew
+- Homebrew로 설치한 nvm
+- 쓰기 가능한 `$HOME/.nvm`
 
-## 2. 관리 대상
+수동 실행에서는 `brew upgrade` 중 macOS 관리자 비밀번호가 필요할 수 있다.
 
-- Homebrew 및 Homebrew 설치 패키지
-- nvm
-- Node.js
-- Python
-- npm
-- pnpm
-- vite
-- npm-check-update
-
-## 3. 파일 생성
-
-- 개발환경 첫 셋업 시, `homebrew`로 설치되는 루트 폴더에 `.nvm` 폴더 생성할 것.
-- 프로젝트 폴더에 아래의 파일 생성할 것.
-
-```plaintext
-.date-cache
-.latest-date
+```zsh
+zsh /absolute/path/to/shell-update/update.sh
 ```
 
-## 4. .zshrc
+자동 실행이나 비대화형 실행에서는 비밀번호 프롬프트를 피하기 위해 `brew upgrade`만 건너뛴다. 나머지 단계는 실행한다.
 
-```bash
-# ...앞 내용 생략
-# 노드/파이썬 실행
+```zsh
+zsh /absolute/path/to/shell-update/update.sh --auto
+```
 
-# 노드 & 파이썬 실행
-export NVM_DIR="$HOME/.nvm"
-[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"  # This loads nvm
-[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
-export PYENV_ROOT="$HOME/.pyenv"
-[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
+## 처리 순서
 
-eval "$(pyenv init -)"
+1. Homebrew 저장소 갱신
+2. Homebrew 패키지 업그레이드(수동 대화형 실행만)
+3. Node.js 24 LTS 설치·활성화 및 nvm 기본 버전 설정
+4. 활성 Node.js의 npm 실행 상태 확인
+5. vite, pnpm, http-server, npm-check-updates 글로벌 업데이트
 
+Node.js가 현재 셸에서 비활성이거나 nvm 기본 alias가 깨진 경우에도 최신 LTS를 설치·활성화한 뒤 기본 버전을 복구한다. NVM은 스크립트의 엄격한 zsh 오류 옵션과 분리해서 실행한다.
 
-# 업데이트 루틴 스크립트 자동 실행 설정
-UPDATE_DIR="$HOME/{프로젝트 폴더 경로}"
-# 플래그 파일 경로 설정
+## 매일 한 번 자동 실행
+
+아래 예시는 첫 프롬프트에서 백그라운드로 실행하고, 전체 루틴이 성공한 경우에만 `.date-cache`를 생성한다.
+
+```zsh
+UPDATE_DIR="$HOME/projects/mac-env/shell-update"
 UPDATE_FLAG="$UPDATE_DIR/.date-cache"
 LAST_UPDATE="$UPDATE_DIR/.latest-date"
 
-# 매일 자정 플래그 파일 초기화
-if [[ $(date +%F) != $(cat $LAST_UPDATE 2>/dev/null) ]]; then
-  rm -f "$UPDATE_FLAG"  # 플래그 파일 제거
-  date +%F > $LAST_UPDATE  # 마지막 실행 날짜 업데이트
-fi
+_run_daily_update_once() {
+  add-zsh-hook -d precmd _run_daily_update_once
 
-# 플래그 파일이 없을 경우에만 업데이트 스크립트를 실행
-if [ ! -f "$UPDATE_FLAG" ]; then
-  echo "[업데이트 루틴 실행]"
-  source $UPDATE_DIR/update.sh  # 스크립트를 첫 실행에만 실행하도록 설정
-  touch "$UPDATE_FLAG"  # 플래그 파일 생성
-fi
+  if [[ $(date +%F) != $(cat "$LAST_UPDATE" 2>/dev/null) ]]; then
+    rm -f "$UPDATE_FLAG"
+    date +%F > "$LAST_UPDATE"
+  fi
 
+  if [[ -f "$UPDATE_FLAG" ]]; then
+    return 0
+  fi
+
+  (
+    SHELL_UPDATE_AUTO=1 zsh "$UPDATE_DIR/update.sh" --auto
+    update_exit_code=$?
+
+    if [[ $update_exit_code -eq 0 ]]; then
+      touch "$UPDATE_FLAG"
+    else
+      print -u2 "[업데이트 루틴 실패] $UPDATE_DIR/logs 의 최신 로그를 확인하세요."
+    fi
+  ) &!
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _run_daily_update_once
 ```
 
-## 5. 오류발생 대처
+## 로그와 중복 실행 방지
 
-### update.sh is already running
+- 로그: `logs/update-YYYY-MM-DD_HH-MM-SS.log`
+- 실행 락: `logs/.update.lock`
+- 실행 중인 프로세스가 있으면 exit code `75`로 종료한다.
+- PID가 없거나 종료된 프로세스의 락은 stale lock으로 판단해 자동 복구한다.
 
-- `logs/.update.lock`는 숨김 디렉터리라 Finder나 일반 `ls`에서는 비어 있는 것처럼 보일 수 있다.
-- 현재 스크립트는 락 디렉터리에 실행 중인 PID를 기록한다.
-- PID가 없거나 이미 종료된 프로세스의 PID라면 stale lock으로 판단하고 자동 제거한 뒤 다시 실행한다.
-- 실제 실행 중인 PID가 있으면 exit code `75`로 종료한다. 이 경우 `.date-cache`를 생성하면 안 된다.
-- 직접 확인할 때는 아래 명령을 사용한다.
-
-```bash
+```zsh
 ls -la "$UPDATE_DIR/logs"
 ```
 
-### npm 인식 오류
+## npm 상태 오류
 
-- 루틴 진행 이후, npm 인식이 되지 않는 경우, nvm 에서 해당 버전을 재설치한다.
-- update.sh로 설치하는 이유는, 글로벌 패키지까지 한번에 설치하고 루틴 정상화 테크역할까지 겸할 수 있기 때문.
-- npm 글로벌 업데이트 시, `nvm install-latest-npm`를 실행하여 처리한다.
+Node.js 활성화 후에도 npm을 실행할 수 없으면 글로벌 패키지를 설치하지 않고 중단한다. 로그에 출력된 현재 Node.js 버전을 사용해 nvm 설치를 수동 복구한 뒤 다시 실행한다.
 
-```bash
-nvm uninstall XX.XX.XX
-source ~/{경로}/update.sh
+```zsh
+nvm deactivate
+nvm uninstall v24.x.x
+nvm cache clear
+nvm install v24.x.x
+nvm use v24.x.x
+nvm alias default v24.x.x
 ```
+
+## Homebrew cask 감사 도구
+
+`check-available-migration-cask.sh`는 `/Applications`의 앱과 Homebrew cask 관리 상태를 비교하는 별도 감사 스크립트다. 업데이트 루틴에서는 자동 실행하지 않는다.
