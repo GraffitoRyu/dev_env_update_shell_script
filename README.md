@@ -76,11 +76,12 @@ autoload -Uz add-zsh-hook
 add-zsh-hook precmd _run_daily_update_once
 ```
 
-## 로그와 중복 실행 방지
+## 로그와 자동 실행 중복 방지
 
 - 로그: `logs/update-YYYY-MM-DD_HH-MM-SS.log`
-- 실행 락: `logs/.update.lock`
-- 실행 중인 프로세스가 있으면 exit code `75`로 종료한다.
+- 자동 실행 락: `logs/.update.lock`
+- 자동 실행 중인 프로세스가 있으면 새 자동 실행은 exit code `75`로 종료한다.
+- 수동 실행은 자동 실행 락의 제한을 받지 않는다.
 - PID가 없거나 종료된 프로세스의 락은 stale lock으로 판단해 자동 복구한다.
 
 ```zsh

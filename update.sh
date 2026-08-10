@@ -15,7 +15,13 @@ main() {
   local lock_dir="$log_dir/.update.lock"
   local current_pid
   local lock_busy_exit_code=75
+  local RUN_MODE="${1:-manual}"
+  local IS_AUTO_RUN=0
   mkdir -p "$log_dir"
+
+  if [[ "$RUN_MODE" == "--auto" || "${SHELL_UPDATE_AUTO:-0}" == "1" ]]; then
+    IS_AUTO_RUN=1
+  fi
 
   if zmodload zsh/system 2>/dev/null; then
     current_pid="$sysparams[pid]"
@@ -24,6 +30,7 @@ main() {
   fi
 
   cleanup_lock() {
+    (( IS_AUTO_RUN )) || return 0
     command rm -f "$lock_dir/pid" "$lock_dir/started_at" 2>/dev/null || true
     rmdir "$lock_dir" 2>/dev/null || true
   }
@@ -56,12 +63,14 @@ main() {
     return "$lock_busy_exit_code"
   }
 
-  acquire_lock
-  local lock_exit_code=$?
-  if (( lock_exit_code != 0 )); then
-    return "$lock_exit_code"
+  if (( IS_AUTO_RUN )); then
+    acquire_lock
+    local lock_exit_code=$?
+    if (( lock_exit_code != 0 )); then
+      return "$lock_exit_code"
+    fi
+    trap 'cleanup_lock' EXIT INT TERM HUP
   fi
-  trap 'cleanup_lock' EXIT INT TERM HUP
 
   local run_at
   run_at="$(date '+%Y-%m-%d_%H-%M-%S')"
@@ -74,13 +83,7 @@ main() {
   local BOLD='\033[1m'
   local RESET='\033[0m'
   local NODE_LTS_VERSION='24'
-  local RUN_MODE="${1:-manual}"
-  local IS_AUTO_RUN=0
   local error_reported=0
-
-  if [[ "$RUN_MODE" == "--auto" || "${SHELL_UPDATE_AUTO:-0}" == "1" ]]; then
-    IS_AUTO_RUN=1
-  fi
 
   keep_shell_open() {
     if (( IS_SOURCED )) || [[ -o interactive ]]; then
