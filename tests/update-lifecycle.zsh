@@ -52,11 +52,18 @@ nvm_helper() {
 nvm() {
   case "$1" in
     ls-remote) print v24.21.0 ;;
+    which)
+      [[ "${HOLD_NVM:-0}" != 1 || -f "$TEST_DIR/node-ready" ]] || return 3
+      print "$HOME/.nvm/versions/node/v24.21.0/bin/node"
+      ;;
     install) nvm_helper; print ready > "$TEST_DIR/node-ready" ;;
+    use) export PATH="$HOME/.nvm/versions/node/v24.21.0/bin:$PATH" ;;
   esac
 }
 MOCK
 chmod +x "$test_dir/bin/"*
+mkdir -p "$HOME/.nvm/versions/node/v24.21.0/bin"
+cp "$test_dir/bin/"{node,npm} "$HOME/.nvm/versions/node/v24.21.0/bin/"
 
 await_start() {
   local attempt

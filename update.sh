@@ -250,10 +250,11 @@ main() {
     echo "${BOLD}${RED}- Current:${RESET} ${current_node_version:-미설치 또는 비활성}"
     echo ""
 
-    if [[ "$latest_node_version" != "$current_node_version" ]]; then
-      echo "${BOLD}${RED}Node.js가 최신 버전이 아닙니다. 업데이트를 진행합니다...${RESET}"
-      echo ""
-      echo "- (1/2) Node.js $latest_node_version 설치중..."
+    if run_nvm which "$latest_node_version" >/dev/null 2>&1; then
+      echo "Node.js $latest_node_version 설치를 확인했습니다."
+    else
+      (( interrupted )) && return "$interrupted"
+      echo "Node.js $latest_node_version 설치중..."
       if run_nvm install "$latest_node_version"; then
         :
       else
@@ -261,18 +262,14 @@ main() {
         echo "${BOLD}${RED}[ERROR]${RESET} Node.js $latest_node_version 설치에 실패했습니다."
         return "$nvm_install_exit_code"
       fi
-      echo ""
-      echo "- (2/2) Node.js $latest_node_version 활성화중..."
-      if run_nvm use "$latest_node_version"; then
-        :
-      else
-        local nvm_use_exit_code=$?
-        echo "${BOLD}${RED}[ERROR]${RESET} Node.js $latest_node_version 활성화에 실패했습니다."
-        return "$nvm_use_exit_code"
-      fi
-      rehash
+    fi
+
+    if run_nvm use "$latest_node_version"; then
+      :
     else
-      echo "${BOLD}${RED}Node.js가 이미 최신 버전입니다.${RESET}"
+      local nvm_use_exit_code=$?
+      echo "${BOLD}${RED}[ERROR]${RESET} Node.js $latest_node_version 활성화에 실패했습니다."
+      return "$nvm_use_exit_code"
     fi
 
     if run_nvm alias default "$latest_node_version" >/dev/null; then
@@ -286,6 +283,16 @@ main() {
     rehash
     if (( ! $+commands[node] )); then
       echo "${BOLD}${RED}[ERROR]${RESET} Node.js $latest_node_version 활성화 후에도 node 명령을 찾을 수 없습니다."
+      return 1
+    fi
+
+    local node_root="$NVM_DIR/versions/node/$latest_node_version"
+    node_root="${node_root:A}"
+    local node_path="$(command -v node)"
+    if [[ "${node_path:A}" != "$node_root"/* ]]; then
+      echo "${BOLD}${RED}[ERROR]${RESET} 활성 node가 목표 nvm 설치 경로에 속하지 않습니다."
+      echo "- expected root: $node_root"
+      echo "- actual: $node_path"
       return 1
     fi
 
@@ -312,8 +319,15 @@ main() {
     local npm_version
 
     npm_path="$(command -v npm 2>/dev/null || true)"
-    if [[ -n "$npm_path" ]]; then
-      npm_version="$(npm -v 2>/dev/null || true)"
+    if [[ -n "$npm_path" && "${npm_path:A}" != "$node_root"/* ]]; then
+      echo "${BOLD}${RED}[ERROR]${RESET} 활성 npm이 목표 nvm 설치 경로에 속하지 않습니다."
+      echo "- expected root: $node_root"
+      echo "- actual: ${npm_path:-not found}"
+      return 1
+    fi
+
+    if [[ -n "$npm_path" ]] && npm_version="$(npm -v 2>/dev/null)"; then
+      :
     else
       npm_version=""
     fi
