@@ -9,13 +9,18 @@ set -euo pipefail
 
 WORKDIR="${PWD}/brew-app-audit"
 mkdir -p "$WORKDIR"
+STAGING_DIR="$(mktemp -d "$WORKDIR/.audit.XXXXXX")"
+trap 'rm -rf "$STAGING_DIR"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
-APPS_RAW="$WORKDIR/apps-raw.txt"
-APPS_NORM="$WORKDIR/apps-normalized.txt"
-INSTALLED_CASKS="$WORKDIR/installed-casks.txt"
-INSTALLED_CASK_NAMES="$WORKDIR/installed-cask-names.txt"
-CSV_OUT="$WORKDIR/apps-audit.csv"
-UNMANAGED_OUT="$WORKDIR/unmanaged-apps.txt"
+APPS_RAW="$STAGING_DIR/apps-raw.txt"
+APPS_NORM="$STAGING_DIR/apps-normalized.txt"
+INSTALLED_CASKS="$STAGING_DIR/installed-casks.txt"
+INSTALLED_CASK_NAMES="$STAGING_DIR/installed-cask-names.txt"
+CSV_OUT="$STAGING_DIR/apps-audit.csv"
+UNMANAGED_OUT="$STAGING_DIR/unmanaged-apps.txt"
 MAX_CANDIDATES=12
 
 : > "$APPS_RAW"
@@ -26,7 +31,18 @@ MAX_CANDIDATES=12
 : > "$UNMANAGED_OUT"
 
 collect_apps() {
-  find /Applications "$HOME/Applications" -maxdepth 2 -type d -name "*.app" 2>/dev/null \
+  local directory
+  local -a directories=()
+  for directory in /Applications "$HOME/Applications"; do
+    if [[ -d "$directory" ]]; then
+      directories+=("$directory")
+    fi
+  done
+  if (( ${#directories} == 0 )); then
+    return 0
+  fi
+
+  find "${directories[@]}" -maxdepth 2 -type d -name "*.app" \
     | sed 's#.*/##' \
     | sed 's/\.app$//' \
     | awk 'NF && $0 !~ /^\./ && $0 != "Karabiner-EventViewer"' \
@@ -178,10 +194,8 @@ search_candidates() {
     return 0
   fi
 
-  brew search --cask --desc "$query" 2>/dev/null \
-    | awk 'NF && $0 !~ /^==> Casks$/' \
-    | head -n "$MAX_CANDIDATES" \
-    || true
+  brew search --cask --desc "$query" \
+    | awk -v max="$MAX_CANDIDATES" 'NF && $0 !~ /^==> Casks$/ { if (++count <= max) print }'
 }
 
 emit_alias_candidate() {
@@ -204,8 +218,8 @@ build_installed_cask_names() {
   ruby -rjson -rshellwords -e '
     STDIN.each_line(chomp: true) do |token|
       next if token.empty?
-      json = `brew info --cask #{token.shellescape} --json=v2 2>/dev/null`
-      next if json.nil? || json.empty?
+      json = `brew info --cask #{token.shellescape} --json=v2`
+      abort "Failed to read installed cask: #{token}" unless $?.success?
 
       data = JSON.parse(json)
       casks = data["casks"] || []
@@ -237,13 +251,13 @@ print_progress() {
   printf '\r[%s/%s] Processing: %s' "$current" "$total" "$app_name" >&2
 }
 
-collect_apps > "$APPS_RAW"
+collect_apps > "$APPS_RAW" || exit $?
 while IFS= read -r app_name; do
   normalize_name "$app_name"
 done < "$APPS_RAW" > "$APPS_NORM"
 
-brew list --cask 2>/dev/null | sort -fu > "$INSTALLED_CASKS"
-build_installed_cask_names
+brew list --cask | sort -fu > "$INSTALLED_CASKS"
+build_installed_cask_names || exit $?
 
 echo "app_name,normalized_name,is_brew_managed,cask_candidates" > "$CSV_OUT"
 
@@ -262,7 +276,7 @@ while IFS= read -r app_name; do
   if already_managed_by_brew "$app_name" "$norm_name" "$alias_name"; then
     managed="yes"
   else
-    echo "$app_name" >> "$UNMANAGED_OUT"
+    printf '%s\n' "$app_name" >> "$UNMANAGED_OUT"
     if ! should_skip_candidate_search "$app_name"; then
       candidates="$({
           if [[ -n "$alias_name" ]]; then
@@ -278,15 +292,15 @@ while IFS= read -r app_name; do
         } \
           | awk 'NF' \
           | sort -fu \
-          | head -n "$MAX_CANDIDATES" \
+          | awk -v max="$MAX_CANDIDATES" 'NR <= max' \
           | paste -sd ';' -
       )"
     fi
   fi
 
-  candidates="${candidates//\"/\"\"}"
-
-  echo "\"$app_name\",\"$norm_name\",\"$managed\",\"$candidates\"" >> "$CSV_OUT"
+  printf '"%s","%s","%s","%s"\n' \
+    "${app_name//\"/\"\"}" "${norm_name//\"/\"\"}" \
+    "$managed" "${candidates//\"/\"\"}" >> "$CSV_OUT"
 done < "$APPS_RAW"
 
 printf '\n' >&2
@@ -294,12 +308,14 @@ printf '\n' >&2
 total_installed_casks="$(count_lines "$INSTALLED_CASKS")"
 total_unmanaged_apps="$(count_lines "$UNMANAGED_OUT")"
 
+mv "$STAGING_DIR"/* "$WORKDIR/"
+
 echo ""
 echo "Done:"
 echo "- Total apps: $total_apps"
 echo "- Installed casks: $total_installed_casks"
 echo "- Unmanaged apps: $total_unmanaged_apps"
-echo "- CSV: $CSV_OUT"
-echo "- Unmanaged app list: $UNMANAGED_OUT"
-echo "- Installed cask list: $INSTALLED_CASKS"
-echo "- Installed cask name list: $INSTALLED_CASK_NAMES"
+echo "- CSV: $WORKDIR/${CSV_OUT:t}"
+echo "- Unmanaged app list: $WORKDIR/${UNMANAGED_OUT:t}"
+echo "- Installed cask list: $WORKDIR/${INSTALLED_CASKS:t}"
+echo "- Installed cask name list: $WORKDIR/${INSTALLED_CASK_NAMES:t}"
