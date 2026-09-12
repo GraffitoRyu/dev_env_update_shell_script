@@ -5,7 +5,12 @@ repo_dir="${0:A:h:h}"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
 mkdir -p "$test_dir/bin" "$test_dir/nvm" "$test_dir/home/.nvm/versions/node/v24.21.0/bin"
-cp "$repo_dir/update.sh" "$test_dir/update.sh"
+cp "$repo_dir/update.sh" "$repo_dir/pnpm-policy.zsh" "$test_dir/"
+export FAKE_PNPM_PREFIX="$test_dir/pnpm"
+mkdir -p "$FAKE_PNPM_PREFIX/bin"
+printf '#!/bin/zsh\nprint 11.26.0\n' > "$FAKE_PNPM_PREFIX/bin/pnpm"
+chmod +x "$FAKE_PNPM_PREFIX/bin/pnpm"
+
 export FAKE_NVM_PREFIX="$test_dir/nvm"
 export HOME="$test_dir/home"
 export MANAGED_BIN="$HOME/.nvm/versions/node/v24.21.0/bin"
@@ -14,6 +19,10 @@ export NPM_CALLS="$test_dir/npm-calls"
 
 cat > "$test_dir/bin/brew" <<'MOCK'
 #!/bin/zsh
+if [[ "$1" == --prefix && "$2" == --installed ]]; then
+  print -r -- "$FAKE_PNPM_PREFIX"
+  exit 0
+fi
 if [[ "$1" == --prefix ]]; then
   print -r -- "$FAKE_NVM_PREFIX"
 fi
@@ -36,7 +45,7 @@ cat > "$test_dir/nvm/nvm.sh" <<'MOCK'
 nvm() {
   print -r -- "$*" >> "$NVM_CALLS"
   case "$1" in
-    ls-remote) print v24.21.0 ;;
+    ls-remote) print -l v24.20.0 v24.21.0 v25.9.0 v26.8.2 ;;
     which)
       [[ "$SCENARIO" != install-failure && "$SCENARIO" != not-installed ]] || return 3
       print -r -- "$MANAGED_BIN/node"

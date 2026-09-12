@@ -15,12 +15,21 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "$test_dir/bin" "$test_dir/nvm" "$test_dir/home"
-cp "$repo_dir/update.sh" "$test_dir/update.sh"
+cp "$repo_dir/update.sh" "$repo_dir/pnpm-policy.zsh" "$test_dir/"
+export FAKE_PNPM_PREFIX="$test_dir/pnpm"
+mkdir -p "$FAKE_PNPM_PREFIX/bin"
+printf '#!/bin/zsh\nprint 11.26.0\n' > "$FAKE_PNPM_PREFIX/bin/pnpm"
+chmod +x "$FAKE_PNPM_PREFIX/bin/pnpm"
+
 export PATH="$test_dir/bin:/usr/bin:/bin"
 export HOME="$test_dir/home" TEST_DIR="$test_dir"
 
 cat > "$test_dir/bin/brew" <<'MOCK'
 #!/usr/bin/env zsh
+if [[ "$1" == --prefix && "$2" == --installed ]]; then
+  print -r -- "$FAKE_PNPM_PREFIX"
+  exit 0
+fi
 if [[ "$1" == update ]]; then
   print started > "$TEST_DIR/started"
   if [[ "${HOLD_BREW:-0}" == 1 ]]; then

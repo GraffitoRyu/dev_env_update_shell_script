@@ -14,10 +14,19 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$fake_bin" "$fake_nvm" "$test_dir/home/.nvm/versions/node/v24.21.0/bin"
-cp "$repo_dir/update.sh" "$test_dir/update.sh"
+cp "$repo_dir/update.sh" "$repo_dir/pnpm-policy.zsh" "$test_dir/"
+export FAKE_PNPM_PREFIX="$test_dir/pnpm"
+mkdir -p "$FAKE_PNPM_PREFIX/bin"
+printf '#!/bin/zsh\nprint 11.26.0\n' > "$FAKE_PNPM_PREFIX/bin/pnpm"
+chmod +x "$FAKE_PNPM_PREFIX/bin/pnpm"
+
 
 cat > "$fake_bin/brew" <<'EOF'
 #!/usr/bin/env zsh
+if [[ "$1" == --prefix && "$2" == --installed ]]; then
+  print -r -- "$FAKE_PNPM_PREFIX"
+  exit 0
+fi
 if [[ "$1" == "--prefix" && "$2" == "nvm" ]]; then
   print -r -- "$FAKE_NVM_PREFIX"
 fi

@@ -16,6 +16,7 @@ main() {
   local lock_file="$log_dir/.update.flock"
   local lock_fd=-1
   local interrupted=0
+  local pnpm_check_dir=""
   local lock_busy_exit_code=75
   local RUN_MODE="${1:-manual}"
   local IS_AUTO_RUN=0
@@ -161,37 +162,55 @@ main() {
       return 127
     fi
 
-    echo " ${BLUE}↺${RESET} ${YELLOW}[1/5] Homebrew 업데이트 실행중...${RESET}"
+    local PNPM_MAJOR
+    source "$script_dir/pnpm-policy.zsh"
+    if [[ "$PNPM_MAJOR" != <-> ]] || (( PNPM_MAJOR < 1 )); then
+      echo "[ERROR] pnpm-policy.zsh의 PNPM_MAJOR는 양의 정수여야 합니다."
+      return 1
+    fi
+    local pnpm_formula="pnpm@$PNPM_MAJOR"
+    local formula
+
+    echo " ${BLUE}↺${RESET} ${YELLOW}[1/6] Homebrew 업데이트 실행중...${RESET}"
     brew update
-    echo " ${GREEN}✓${RESET} ${YELLOW}[1/5]${RESET} ${YELLOW}Homebrew 업데이트 루틴 완료!${RESET}"
+    echo " ${GREEN}✓${RESET} ${YELLOW}[1/6]${RESET} ${YELLOW}Homebrew 업데이트 루틴 완료!${RESET}"
 
     echo ""
     echo "------------------------------------------------"
     echo ""
 
-    echo " ${BLUE}↺${RESET} ${YELLOW}[2/5] Homebrew 패키지 업데이트 실행중...${RESET}"
+    echo " ${BLUE}↺${RESET} ${YELLOW}[2/6] Homebrew 패키지 업데이트 실행중...${RESET}"
 
     if (( IS_AUTO_RUN )); then
-      echo "${BOLD}${YELLOW}[SKIP]${RESET} 자동 실행 모드에서는 Password 프롬프트 방지를 위해 brew upgrade를 건너뜁니다."
+      echo "${BOLD}${YELLOW}[SKIP]${RESET} 자동 실행 모드에서는 Password 프롬프트 방지를 위해 전체 Homebrew 업그레이드를 건너뜁니다."
       echo "- 전체 Homebrew 업그레이드가 필요하면 아래 명령을 터미널에서 직접 실행하세요."
       echo "  zsh $script_path"
     elif [[ ! -t 0 ]]; then
-      echo "${BOLD}${YELLOW}[SKIP]${RESET} 비대화형 실행 환경에서는 Password 프롬프트 방지를 위해 brew upgrade를 건너뜁니다."
+      echo "${BOLD}${YELLOW}[SKIP]${RESET} 비대화형 실행 환경에서는 Password 프롬프트 방지를 위해 전체 Homebrew 업그레이드를 건너뜁니다."
       echo "- 전체 Homebrew 업그레이드가 필요하면 아래 명령을 터미널에서 직접 실행하세요."
       echo "  zsh $script_path"
     else
       echo "${BOLD}${YELLOW}[INFO]${RESET} Homebrew cask 업데이트 중 macOS 관리자 비밀번호가 필요할 수 있습니다."
       echo "${BOLD}${YELLOW}[INFO]${RESET} Password 요청이 나오면 이 수동 실행 터미널에서 직접 입력하세요."
-      brew upgrade
+      local outdated_formulae
+      local -a upgrade_formulae=()
+      outdated_formulae="$(brew outdated --formula --quiet)"
+      for formula in ${(f)outdated_formulae}; do
+        [[ "${formula:t}" == pnpm || "${formula:t}" == pnpm@* ]] || upgrade_formulae+=("$formula")
+      done
+      if (( ${#upgrade_formulae} )); then
+        brew upgrade --formula "${upgrade_formulae[@]}"
+      fi
+      brew upgrade --cask
     fi
 
-    echo " ${GREEN}✓${RESET} ${YELLOW}[2/5]${RESET} ${YELLOW}Homebrew 패키지 업데이트 루틴 완료!${RESET}"
+    echo " ${GREEN}✓${RESET} ${YELLOW}[2/6]${RESET} ${YELLOW}Homebrew 패키지 업데이트 루틴 완료!${RESET}"
 
     echo ""
     echo "------------------------------------------------"
     echo ""
 
-    echo " ${BLUE}↺${RESET} ${YELLOW}[3/5] Node.js 최신 업데이트 확인중...${RESET}"
+    echo " ${BLUE}↺${RESET} ${YELLOW}[3/6] Node.js 최신 업데이트 확인중...${RESET}"
 
     local nvm_prefix
     local nvm_script
@@ -307,13 +326,13 @@ main() {
     echo "${BOLD}${GREEN}- Default:${RESET} $latest_node_version"
 
     echo ""
-    echo " ${GREEN}✓${RESET} ${YELLOW}[3/5]${RESET} ${YELLOW}Node.js 업데이트 루틴 완료!${RESET}"
+    echo " ${GREEN}✓${RESET} ${YELLOW}[3/6]${RESET} ${YELLOW}Node.js 업데이트 루틴 완료!${RESET}"
 
     echo ""
     echo "------------------------------------------------"
     echo ""
 
-    echo " ${BLUE}↺${RESET} ${YELLOW}[4/5] npm 상태 점검중...${RESET}"
+    echo " ${BLUE}↺${RESET} ${YELLOW}[4/6] npm 상태 점검중...${RESET}"
 
     local npm_path
     local npm_version
@@ -353,13 +372,49 @@ main() {
 
     echo "- npm 상태가 정상입니다. 별도 npm self-update 단계는 건너뜁니다."
     echo ""
-    echo " ${GREEN}✓${RESET} ${YELLOW}[4/5]${RESET} ${YELLOW}npm 상태 점검 루틴 완료!${RESET}"
+    echo " ${GREEN}✓${RESET} ${YELLOW}[4/6]${RESET} ${YELLOW}npm 상태 점검 루틴 완료!${RESET}"
 
     echo ""
     echo "------------------------------------------------"
     echo ""
 
-    echo " ${BLUE}↺${RESET} ${YELLOW}[5/5] npm 글로벌 패키지 업데이트 실행중...${RESET}"
+    echo " ${BLUE}↺${RESET} ${YELLOW}[5/6] $pnpm_formula 업데이트 실행중...${RESET}"
+    local pnpm_prefix pinned_formulae
+    if pnpm_prefix="$(brew --prefix --installed "$pnpm_formula" 2>/dev/null)"; then
+      :
+    else
+      echo "[ERROR] $pnpm_formula 설치가 필요합니다. docs/pnpm-migration.md의 전환 절차를 실행하세요."
+      return 1
+    fi
+    pinned_formulae="$(brew list --formula --pinned)"
+    for formula in ${(f)pinned_formulae}; do
+      if [[ "${formula:t}" == "$pnpm_formula" ]]; then
+        echo "[ERROR] $pnpm_formula 버전이 pin되어 최신 업데이트가 차단되었습니다. pin 상태를 직접 확인하세요."
+        return 1
+      fi
+    done
+    brew upgrade "$pnpm_formula"
+
+    local pnpm_path="$pnpm_prefix/bin/pnpm"
+    if [[ ! -x "$pnpm_path" || "${pnpm_path:A}" != "${pnpm_prefix:A}"/* ]]; then
+      echo "[ERROR] pnpm 실행 파일이 $pnpm_formula 설치 경로에 속하지 않습니다: $pnpm_path"
+      return 1
+    fi
+    local pnpm_version
+    pnpm_check_dir="$(mktemp -d "${TMPDIR:-/tmp}/pnpm-version.XXXXXX")"
+    pnpm_version="$(cd "$pnpm_check_dir" && "$pnpm_path" --version)"
+    if [[ "$pnpm_version" != "$PNPM_MAJOR".<->.<-> ]]; then
+      echo "[ERROR] pnpm 버전이 승인된 메이저와 다릅니다: $pnpm_version (expected: $PNPM_MAJOR.x.x)"
+      return 1
+    fi
+    command rm -rf "$pnpm_check_dir"
+    pnpm_check_dir=""
+    echo "- pnpm path: $pnpm_path"
+    echo "- pnpm version: $pnpm_version"
+    echo " ${GREEN}✓${RESET} ${YELLOW}[5/6]${RESET} pnpm 업데이트 루틴 완료!"
+    echo ""
+
+    echo " ${BLUE}↺${RESET} ${YELLOW}[6/6] npm 글로벌 패키지 업데이트 실행중...${RESET}"
     echo "- (1/3) vite 업데이트중..."
     npm i -g vite@latest
     echo ""
@@ -369,7 +424,7 @@ main() {
     echo "- (3/3) npm-check-updates 업데이트중..."
     npm i -g npm-check-updates@latest
     echo ""
-    echo " ${GREEN}✓${RESET} ${YELLOW}[5/5]${RESET} ${YELLOW}npm 글로벌 패키지 업데이트 루틴 완료!${RESET}"
+    echo " ${GREEN}✓${RESET} ${YELLOW}[6/6]${RESET} ${YELLOW}npm 글로벌 패키지 업데이트 루틴 완료!${RESET}"
 
     echo ""
     echo "┎⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯┒"
@@ -379,6 +434,7 @@ main() {
 
     on_success
   } always {
+    [[ -z "$pnpm_check_dir" ]] || command rm -rf "$pnpm_check_dir"
     cleanup_lock
   } > >(tee -a "$log_file") 2>&1
 

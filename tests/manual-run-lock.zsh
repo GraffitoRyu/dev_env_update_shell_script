@@ -6,7 +6,7 @@ repo_dir="${0:A:h:h}"
 test_dir="$(mktemp -d)"
 trap 'rm -rf "$test_dir"' EXIT
 mkdir -p "$test_dir/logs"
-cp "$repo_dir/update.sh" "$test_dir/update.sh"
+cp "$repo_dir/update.sh" "$repo_dir/pnpm-policy.zsh" "$test_dir/"
 lock_file="$test_dir/logs/.update.flock"
 : > "$lock_file"
 zmodload zsh/system
