@@ -5,9 +5,9 @@ Homebrew, Node.js LTS와 npm 글로벌 개발 도구를 한 번에 점검·업�
 ## 관리 대상
 
 - Homebrew와 설치된 formula/cask
-- Homebrew로 설치한 nvm
+- Homebrew로 설치한 nvm과 pnpm
 - Node.js 24 LTS
-- npm, pnpm, vite, http-server, npm-check-updates
+- npm, vite, http-server, npm-check-updates
 
 ## 실행 조건
 
@@ -35,7 +35,9 @@ zsh /absolute/path/to/shell-update/update.sh --auto
 2. Homebrew 패키지 업그레이드(수동 대화형 실행만)
 3. Node.js 24 LTS 설치·활성화 및 nvm 기본 버전 설정
 4. 활성 Node.js의 npm 실행 상태 확인
-5. vite, pnpm, http-server, npm-check-updates 글로벌 업데이트
+5. vite, http-server, npm-check-updates 글로벌 업데이트
+
+pnpm은 2단계의 Homebrew 패키지 업그레이드로만 관리한다.
 
 Node.js가 현재 셸에서 비활성이거나 nvm 기본 alias가 깨진 경우에도 최신 LTS를 설치·활성화한 뒤 기본 버전을 복구한다. 다른 경로의 Node.js가 같은 버전이어도 nvm 관리 경로로 활성화하고, node와 npm이 해당 설치에 속하는지 확인한다. 기존 Node.js 설치를 삭제하거나 글로벌 패키지를 이관하지 않는다. NVM은 스크립트의 엄격한 zsh 오류 옵션과 분리해서 실행한다.
 

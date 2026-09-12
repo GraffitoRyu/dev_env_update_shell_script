@@ -360,16 +360,13 @@ main() {
     echo ""
 
     echo " ${BLUE}↺${RESET} ${YELLOW}[5/5] npm 글로벌 패키지 업데이트 실행중...${RESET}"
-    echo "- (1/4) vite 업데이트중..."
+    echo "- (1/3) vite 업데이트중..."
     npm i -g vite@latest
     echo ""
-    echo "- (2/4) pnpm 업데이트중..."
-    npm i -g pnpm@latest
-    echo ""
-    echo "- (3/4) http-server 업데이트중..."
+    echo "- (2/3) http-server 업데이트중..."
     npm i -g http-server@latest
     echo ""
-    echo "- (4/4) npm-check-updates 업데이트중..."
+    echo "- (3/3) npm-check-updates 업데이트중..."
     npm i -g npm-check-updates@latest
     echo ""
     echo " ${GREEN}✓${RESET} ${YELLOW}[5/5]${RESET} ${YELLOW}npm 글로벌 패키지 업데이트 루틴 완료!${RESET}"
