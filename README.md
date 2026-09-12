@@ -5,7 +5,7 @@ Homebrew, Node.js LTS와 npm 글로벌 개발 도구를 한 번에 점검·업�
 ## 관리 대상
 
 - Homebrew와 설치된 formula/cask
-- Homebrew로 설치한 nvm과 pnpm
+- Homebrew로 설치한 nvm과 pnpm@11
 - Node.js 24 LTS
 - npm, vite, http-server, npm-check-updates
 
@@ -23,7 +23,7 @@ Homebrew, Node.js LTS와 npm 글로벌 개발 도구를 한 번에 점검·업�
 zsh /absolute/path/to/shell-update/update.sh
 ```
 
-자동 실행이나 비대화형 실행에서는 비밀번호 프롬프트를 피하기 위해 `brew upgrade`만 건너뛴다. 나머지 단계는 실행한다.
+자동 실행이나 비대화형 실행에서는 비밀번호 프롬프트를 피하기 위해 일반 Homebrew formula/cask 업그레이드를 건너뛴다. 승인된 pnpm 계열의 개별 업그레이드와 나머지 단계는 실행한다.
 
 ```zsh
 zsh /absolute/path/to/shell-update/update.sh --auto
@@ -32,12 +32,17 @@ zsh /absolute/path/to/shell-update/update.sh --auto
 ## 처리 순서
 
 1. Homebrew 저장소 갱신
-2. Homebrew 패키지 업그레이드(수동 대화형 실행만)
+2. pnpm 계열을 제외한 Homebrew 패키지 업그레이드(수동 대화형 실행만)
 3. Node.js 24 LTS 설치·활성화 및 nvm 기본 버전 설정
 4. 활성 Node.js의 npm 실행 상태 확인
-5. vite, http-server, npm-check-updates 글로벌 업데이트
+5. Homebrew pnpm 승인 계열 업데이트 및 실제 경로·버전 확인
+6. vite, http-server, npm-check-updates 글로벌 업데이트
 
-pnpm은 2단계의 Homebrew 패키지 업그레이드로만 관리한다.
+Node.js는 `update.sh`의 `NODE_LTS_VERSION=24`, pnpm은 `pnpm-policy.zsh`의 `PNPM_MAJOR=11` 계열 안에서 최신 버전을 사용한다. 다음 메이저로 전환할 때는 협의 후 해당 값을 수동으로 바꾼다. pnpm의 최신 기준은 Homebrew가 제공하는 해당 계열의 최신 버전이며, 정확한 패치 버전을 고정하지 않는다.
+
+pnpm은 `pnpm@11`처럼 버전이 명시된 Homebrew formula로만 관리한다. 일반 `pnpm`과 다른 pnpm 계열은 이 도구의 전체 업그레이드 대상에서 제외하며, 자동 삭제하거나 pin을 해제하지 않는다. 승인 계열이 미설치이거나 pin으로 업데이트가 막히면 성공으로 처리하지 않는다.
+
+다른 Mac의 첫 설치·기존 npm/Corepack/pnpm 전환은 [pnpm 전환 절차](docs/pnpm-migration.md)를 따른다. `update.sh`는 승인 계열의 절대경로를 사용하며 평소 셸 설정까지 변경하지 않는다. 셸의 지속적인 전환은 별도 전환 도구의 명시적인 적용 단계에서 수행한다.
 
 Node.js가 현재 셸에서 비활성이거나 nvm 기본 alias가 깨진 경우에도 최신 LTS를 설치·활성화한 뒤 기본 버전을 복구한다. 다른 경로의 Node.js가 같은 버전이어도 nvm 관리 경로로 활성화하고, node와 npm이 해당 설치에 속하는지 확인한다. 기존 Node.js 설치를 삭제하거나 글로벌 패키지를 이관하지 않는다. NVM은 스크립트의 엄격한 zsh 오류 옵션과 분리해서 실행한다.
 
@@ -121,7 +126,10 @@ nvm alias default v24.x.x
 zsh tests/manual-run-lock.zsh
 zsh tests/update-lifecycle.zsh
 zsh tests/node-npm-paths.zsh
+zsh tests/npm-global-tools.zsh
+python3 tests/pnpm-update.py
+python3 tests/pnpm-migration.py
 python3 tests/cask-audit.py
 ```
 
-종료·동시 실행, 관리 경로·실패 전파, 감사 실패 시 보고서 보존과 CSV 문자열 보존을 확인한다. 실제 업데이트 실행과는 별도의 검증이다.
+종료·동시 실행, 관리 경로·실패 전파, pnpm 승인 계열과 셸 전환, 감사 실패 시 보고서 보존과 CSV 문자열 보존을 확인한다. 실제 업데이트 실행과는 별도의 검증이다.
