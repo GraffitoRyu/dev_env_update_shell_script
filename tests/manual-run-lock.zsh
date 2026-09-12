@@ -3,37 +3,37 @@
 set -eu
 
 repo_dir="${0:A:h:h}"
-test_dir="${0:A:h}"
-log_dir="$test_dir/logs"
-lock_dir="$log_dir/.update.lock"
-
-cleanup() {
-  command rm -f "$lock_dir/pid" "$lock_dir/started_at" "$log_dir"/update-*.log(N) 2>/dev/null || true
-  rmdir "$lock_dir" "$log_dir" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-mkdir -p "$lock_dir"
+test_dir="$(mktemp -d)"
+trap 'rm -rf "$test_dir"' EXIT
+mkdir -p "$test_dir/logs"
+cp "$repo_dir/update.sh" "$test_dir/update.sh"
+lock_file="$test_dir/logs/.update.flock"
+: > "$lock_file"
 zmodload zsh/system
-echo "$sysparams[pid]" > "$lock_dir/pid"
+zsystem flock -f lock_fd "$lock_file"
 
-eval "$(sed '/^main "\$@"/,$d' "$repo_dir/update.sh")"
+result=0
+output="$(PATH=/usr/bin:/bin zsh "$test_dir/update.sh" manual 2>&1)" || result=$?
+[[ $result == 127 && "$output" != *"already running"* ]]
 
-set +e
-output="$(PATH=/usr/bin:/bin main manual 2>&1)"
-exit_code=$?
-set -e
+# A manual run and unsuccessful contenders must leave the owner's lock intact.
+for attempt in 1 2; do
+  result=0
+  output="$(PATH=/usr/bin:/bin zsh "$test_dir/update.sh" --auto 2>&1)" || result=$?
+  [[ $result == 75 && "$output" == *"already running"* ]]
+done
+zsystem flock -u "$lock_fd"
+result=0
+output="$(PATH=/usr/bin:/bin zsh "$test_dir/update.sh" --auto 2>&1)" || result=$?
+[[ $result == 127 ]]
+[[ -f "$lock_file" ]]
 
-[[ $exit_code -ne 75 ]]
-[[ "$output" != *"already running"* ]]
-[[ -d "$lock_dir" ]]
+# Preserve compatibility with an active updater using the old directory lock.
+mkdir "$test_dir/logs/.update.lock"
+print "$sysparams[pid]" > "$test_dir/logs/.update.lock/pid"
+result=0
+output="$(PATH=/usr/bin:/bin zsh "$test_dir/update.sh" --auto 2>&1)" || result=$?
+[[ $result == 75 ]]
+[[ "$(< "$test_dir/logs/.update.lock/pid")" == "$sysparams[pid]" ]]
 
-set +e
-output="$(PATH=/usr/bin:/bin main --auto 2>&1)"
-exit_code=$?
-set -e
-
-[[ $exit_code -eq 75 ]]
-[[ "$output" == *"already running"* ]]
-
-print 'manual run ignores the lock; automatic run remains blocked'
+print 'manual bypass, native lock ownership, and active legacy lock compatibility pass'

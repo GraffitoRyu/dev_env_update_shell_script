@@ -13,7 +13,9 @@ main() {
   local script_dir="${script_path:A:h}"
   local log_dir="$script_dir/logs"
   local lock_dir="$log_dir/.update.lock"
-  local current_pid
+  local lock_file="$log_dir/.update.flock"
+  local lock_fd=-1
+  local interrupted=0
   local lock_busy_exit_code=75
   local RUN_MODE="${1:-manual}"
   local IS_AUTO_RUN=0
@@ -23,54 +25,45 @@ main() {
     IS_AUTO_RUN=1
   fi
 
-  if zmodload zsh/system 2>/dev/null; then
-    current_pid="$sysparams[pid]"
-  else
-    current_pid="$$"
-  fi
-
   cleanup_lock() {
-    (( IS_AUTO_RUN )) || return 0
-    command rm -f "$lock_dir/pid" "$lock_dir/started_at" 2>/dev/null || true
-    rmdir "$lock_dir" 2>/dev/null || true
+    if (( lock_fd >= 0 )); then
+      zsystem flock -u "$lock_fd"
+      lock_fd=-1
+    fi
   }
 
   acquire_lock() {
-    if mkdir "$lock_dir" 2>/dev/null; then
-      echo "$current_pid" > "$lock_dir/pid"
-      date '+%Y-%m-%d_%H-%M-%S' > "$lock_dir/started_at"
-      return 0
+    if ! zmodload zsh/system 2>/dev/null || ! zsystem supports flock; then
+      echo "[ERROR] zsh file locking is unavailable."
+      return 1
     fi
 
+    # Respect an updater started with the previous directory-lock implementation.
     local lock_pid
     lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
-
     if [[ -n "$lock_pid" && "$lock_pid" == <-> ]] && kill -0 "$lock_pid" 2>/dev/null; then
       echo "[SKIP] update.sh is already running: $lock_dir (pid: $lock_pid)"
       return "$lock_busy_exit_code"
     fi
 
-    echo "[WARN] stale update lock removed: $lock_dir"
-    cleanup_lock
-
-    if mkdir "$lock_dir" 2>/dev/null; then
-      echo "$current_pid" > "$lock_dir/pid"
-      date '+%Y-%m-%d_%H-%M-%S' > "$lock_dir/started_at"
+    # Keep the inode: deleting the file would let concurrent runs lock different files.
+    : >> "$lock_file"
+    if zsystem flock -t 0.001 -f lock_fd "$lock_file"; then
       return 0
+    else
+      local lock_status=$?
+      if (( lock_status == 2 )); then
+        echo "[SKIP] update.sh is already running: $lock_file"
+        return "$lock_busy_exit_code"
+      fi
+      return "$lock_status"
     fi
-
-    echo "[SKIP] update.sh is already running: $lock_dir"
-    return "$lock_busy_exit_code"
   }
 
-  if (( IS_AUTO_RUN )); then
-    acquire_lock
-    local lock_exit_code=$?
-    if (( lock_exit_code != 0 )); then
-      return "$lock_exit_code"
-    fi
-    trap 'cleanup_lock' EXIT INT TERM HUP
-  fi
+  # zsh handles these after the foreground command returns; keep its lock until then.
+  trap 'interrupted=130; return "$interrupted"' INT
+  trap 'interrupted=143; return "$interrupted"' TERM
+  trap 'interrupted=129; return "$interrupted"' HUP
 
   local run_at
   run_at="$(date '+%Y-%m-%d_%H-%M-%S')"
@@ -86,7 +79,7 @@ main() {
   local error_reported=0
 
   keep_shell_open() {
-    if (( IS_SOURCED )) || [[ -o interactive ]]; then
+    if (( IS_AUTO_RUN || interrupted || IS_SOURCED )) || [[ -o interactive ]]; then
       return 0
     fi
 
@@ -130,6 +123,9 @@ main() {
     unsetopt err_return no_unset pipefail
     trap - ERR
     source "$1" --no-use
+    local nvm_exit_code=$?
+    (( interrupted )) && return "$interrupted"
+    return "$nvm_exit_code"
   }
 
   run_nvm() {
@@ -137,11 +133,22 @@ main() {
     unsetopt err_return no_unset pipefail
     trap - ERR
     NVM_NO_COLORS=1 nvm "$@"
+    local nvm_exit_code=$?
+    (( interrupted )) && return "$interrupted"
+    return "$nvm_exit_code"
   }
 
   trap 'on_error ${LINENO} "${funcstack[1]:-main}"' ERR
 
   {
+    if (( IS_AUTO_RUN )); then
+      if acquire_lock; then
+        :
+      else
+        return $?
+      fi
+    fi
+
     echo ""
     echo "┎⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯┒"
     echo "┃        ✨ ${BOLD}${YELLOW}업데이트 루틴을 실행합니다!${RESET}        ┃"
@@ -208,7 +215,7 @@ main() {
     else
       echo "${BOLD}${RED}[ERROR]${RESET} nvm 초기화에 실패했습니다."
       echo "- script: $nvm_script"
-      return 1
+      return $(( interrupted ? interrupted : 1 ))
     fi
 
     local latest_node_version
@@ -362,7 +369,6 @@ main() {
     on_success
   } always {
     cleanup_lock
-    trap - EXIT INT TERM HUP
   } > >(tee -a "$log_file") 2>&1
 
   return 0
