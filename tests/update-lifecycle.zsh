@@ -20,12 +20,19 @@ export FAKE_PNPM_PREFIX="$test_dir/pnpm"
 mkdir -p "$FAKE_PNPM_PREFIX/bin"
 printf '#!/bin/zsh\nprint 11.26.0\n' > "$FAKE_PNPM_PREFIX/bin/pnpm"
 chmod +x "$FAKE_PNPM_PREFIX/bin/pnpm"
+cp "$FAKE_PNPM_PREFIX/bin/pnpm" "$FAKE_PNPM_PREFIX/bin/pnpx"
+ln -s "$FAKE_PNPM_PREFIX/bin/pnpm" "$test_dir/bin/pnpm"
+ln -s "$FAKE_PNPM_PREFIX/bin/pnpx" "$test_dir/bin/pnpx"
 
 export PATH="$test_dir/bin:/usr/bin:/bin"
 export HOME="$test_dir/home" TEST_DIR="$test_dir"
 
 cat > "$test_dir/bin/brew" <<'MOCK'
 #!/usr/bin/env zsh
+if [[ "$1" == --prefix && $# == 1 ]]; then
+  print -r -- "${FAKE_PNPM_PREFIX:h}"
+  exit 0
+fi
 if [[ "$1" == --prefix && "$2" == --installed ]]; then
   print -r -- "$FAKE_PNPM_PREFIX"
   exit 0

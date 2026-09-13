@@ -10,12 +10,11 @@ if (( $# > 1 )) || [[ "$mode" != diagnose && "$mode" != --apply && "$mode" != --
   exit 2
 fi
 if [[ "$mode" == --help ]]; then
-  print '인수 없음: 설치 경로와 전환 계획만 진단합니다. pnpm을 실행하지 않습니다.'
-  print '--apply: pnpm@승인major 설치·검증 후 zsh 관리 블록을 적용합니다.'
+  print '인수 없음: 기존 pnpm을 실행하지 않고 링크·PATH·nvm 충돌을 진단합니다.'
+  print '--apply: 승인 formula 설치·검증 → Homebrew 링크 전환 → 이전 자체 셸 블록 제거'
   exit 0
 fi
 [[ "$PNPM_MAJOR" == <-> ]] && (( PNPM_MAJOR > 0 )) || { print -u2 '잘못된 PNPM_MAJOR'; exit 2; }
-
 formula="pnpm@$PNPM_MAJOR"
 rc_path="${ZDOTDIR:-$HOME}/.zshrc"
 rc_target="${rc_path:A}"
@@ -24,12 +23,47 @@ marker_end='# <<< shell-update pnpm <<<'
 backup=''
 staged=''
 version_dir=''
+old_formula=''
+old_unlinked=0
+link_attempted=0
+rc_replaced=0
+completed=0
+lock_fd=-1
+
 cleanup() {
+  local result=$?
+  local rollback_failed=0
+  trap - EXIT
+  trap '' INT TERM HUP
+  set +e
+  if (( ! completed )); then
+    if (( rc_replaced )); then
+      cp -p "$backup" "$rc_target" || rollback_failed=1
+    fi
+    if (( link_attempted )); then
+      brew unlink "$formula" || rollback_failed=1
+    fi
+    if (( old_unlinked )); then
+      brew link --force "$old_formula" || rollback_failed=1
+    fi
+    if (( rollback_failed )); then
+      print -u2 '복구가 완료되지 않았습니다. 부분 적용 상태이며 다음 링크와 백업을 확인하세요.'
+      ls -ld "$native_bin/pnpm" "$native_bin/pnpx" >&2
+      print -u2 "이전 formula: ${old_formula:-없음}; 설정 백업: ${backup:-없음}"
+      result=1
+    fi
+  fi
   [[ -z "$staged" ]] || rm -f "$staged"
   [[ -z "$version_dir" ]] || rm -rf "$version_dir"
+  (( lock_fd < 0 )) || zsystem flock -u "$lock_fd"
+  exit "$result"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
+# Retained only to recognize and remove an unchanged block from the previous tool.
 managed_block() {
   local bin_path="$1"
   local quoted_bin="${(q)bin_path}"
@@ -51,35 +85,44 @@ $marker_end
 BLOCK
 }
 
-print "승인 formula: $formula (major 변경은 pnpm-policy.zsh에서 수동으로 수행)"
-print "셸 설정: $rc_path"
-print "실제 변경 대상: $rc_target"
-pnpm_path="$(whence -p pnpm || true)"
-print "현재 PATH의 pnpm: ${pnpm_path:-없음}"
-[[ -z "$pnpm_path" ]] || print "실제 실행 파일: ${pnpm_path:A}"
-pnpx_path="$(whence -p pnpx || true)"
-print "현재 PATH의 pnpx: ${pnpx_path:-없음}"
-[[ -z "$pnpx_path" ]] || print "실제 실행 파일: ${pnpx_path:A}"
-print "현재 PATH의 node: $(whence -p node || true)"
-print '현재 pnpm은 실행하지 않습니다. 호출자 셸의 동적 alias/함수는 이 진단에 상속되지 않습니다.'
-
+print "승인 formula: $formula"
+print "기존 셸 블록 검사: $rc_path → $rc_target"
+print '기존 pnpm은 실행하지 않습니다. 사용자 초기화 파일도 source하지 않습니다.'
 if ! (( $+commands[brew] )); then
   print -u2 'Homebrew가 없습니다. 설치 후 다시 실행하세요.'
   [[ "$mode" != --apply ]] && exit 0
   exit 127
 fi
-export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1
+export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+if [[ "$mode" == --apply ]]; then
+  zmodload zsh/system
+  legacy_pid="$(cat "$script_dir/logs/.update.lock/pid" 2>/dev/null || true)"
+  if [[ "$legacy_pid" == <-> ]] && kill -0 "$legacy_pid" 2>/dev/null; then
+    print -u2 '기존 업데이트 실행이 진행 중입니다.'
+    exit 75
+  fi
+  mkdir -p "$script_dir/logs"
+  : >> "$script_dir/logs/.update.flock"
+  if zsystem flock -t 0.001 -f lock_fd "$script_dir/logs/.update.flock"; then
+    :
+  else
+    lock_status=$?
+    (( lock_status != 2 )) || lock_status=75
+    print -u2 '업데이트/전환 잠금을 얻지 못했습니다.'
+    exit "$lock_status"
+  fi
+fi
 brew_prefix="$(brew --prefix)"
+native_bin="$brew_prefix/bin"
 pnpm_bin="$brew_prefix/opt/$formula/bin"
-[[ "$pnpm_bin" != *$'\n'* ]] || { print -u2 '줄바꿈이 있는 설치 경로는 지원하지 않습니다.'; exit 1; }
-print "전환 대상: $pnpm_bin/pnpm"
-print 'Homebrew 설치 목록:'
-brew list --versions | awk '$1 == "pnpm" || $1 ~ /^pnpm@[0-9]+$/ { print }'
-print 'Homebrew pin 목록:'
+formula_root="${pnpm_bin:h:A}"
+installed_formulae="$(brew list --versions | awk '$1 == "pnpm" || $1 ~ /^pnpm@[0-9]+$/ { print $1 }')"
+print "일반 실행 경로: $native_bin/pnpm, $native_bin/pnpx"
+print "설치된 pnpm formula: ${installed_formulae:-없음}"
+print 'pin 상태:'
 brew list --pinned | awk '$0 == "pnpm" || $0 ~ /^pnpm@[0-9]+$/ { print }'
-print '변경 계획: 대상이 없으면 설치 → major 검증 → 기존 설정 백업 → 관리 블록 적용'
-print '기존 pnpm, Corepack, npm, Yarn 및 링크는 삭제하거나 변경하지 않습니다.'
-print '복구 계획: 출력된 백업을 실제 설정 대상에 복사하고 새 zsh를 엽니다. 새 설정 파일에는 별도 제거 안내를 제공합니다.'
+print '기존 패키지는 제거하지 않습니다. Homebrew 링크 전환과 이전 자체 셸 블록 제거만 수행합니다.'
+print '실패 시 링크와 셸 설정을 복구합니다. 설치 단계에서 추가된 패키지는 자동으로 제거하지 않습니다.'
 
 if [[ -L "$rc_path" && ! -e "$rc_path" ]] || [[ -e "$rc_target" && ! -f "$rc_target" ]]; then
   print -u2 '셸 설정이 끊어진 링크 또는 일반 파일이 아닙니다. 변경하지 않습니다.'
@@ -108,60 +151,126 @@ if [[ -f "$rc_target" ]]; then
   fi
 fi
 
-new_block="$(managed_block "$pnpm_bin")"
+# Both native entrypoints must belong to the same installed pnpm formula, or be absent.
+owner_of() {
+  local executable="$1" candidate candidate_root expected
+  [[ -L "$executable" && -e "$executable" ]] || return 1
+  for candidate in "${(@f)installed_formulae}"; do
+    candidate_root="$(brew --prefix --installed "$candidate" 2>/dev/null)" || continue
+    [[ "${executable:A}" == "${candidate_root:A}"/* ]] || continue
+    expected="$candidate_root/bin/${executable:t}"
+    [[ "${executable:A}" == "${expected:A}" ]] || continue
+    print -r -- "$candidate"
+    return 0
+  done
+  return 1
+}
+owner=''
+for name in pnpm pnpx; do
+  executable="$native_bin/$name"
+  candidate_owner='absent'
+  if [[ -e "$executable" || -L "$executable" ]]; then
+    candidate_owner="$(owner_of "$executable")" || { print -u2 "소유 불명 Homebrew 경로: $executable"; exit 1; }
+  fi
+  print "$executable: $candidate_owner"
+  if [[ -n "$owner" && "$owner" != "$candidate_owner" ]]; then
+    print -u2 'pnpm/pnpx 링크가 혼합되었거나 일부만 있습니다. 소유권을 확인한 뒤 복구하세요.'
+    exit 1
+  fi
+  owner="$candidate_owner"
+done
+[[ "$owner" == absent || "$owner" == "$formula" ]] || old_formula="$owner"
+
+shadow=0
+nvm_root="${NVM_DIR:-$HOME/.nvm}"
+for directory in "$nvm_root"/versions/node/*/bin(N/); do
+  for name in pnpm pnpx; do
+    executable="$directory/$name"
+    expected="$pnpm_bin/$name"
+    [[ -e "$executable" || -L "$executable" ]] || continue
+    [[ -x "$executable" && "${expected:A}" == "$formula_root"/* && "${executable:A}" == "${expected:A}" ]] && continue
+    print -u2 "nvm 충돌: $executable → ${executable:A}"
+    shadow=1
+  done
+done
+native_in_path=0
+for directory in "$path[@]"; do
+  if [[ "${directory:A}" == "${native_bin:A}" ]]; then
+    native_in_path=1
+    break
+  fi
+  for name in pnpm pnpx; do
+    executable="$directory/$name"
+    expected="$pnpm_bin/$name"
+    [[ -x "$executable" || -L "$executable" ]] || continue
+    [[ -x "$executable" && "${expected:A}" == "$formula_root"/* && "${executable:A}" == "${expected:A}" ]] && continue
+    print -u2 "PATH 우선 충돌: $executable → ${executable:A}"
+    shadow=1
+  done
+done
+if (( ! native_in_path )); then
+  print -u2 "현재 PATH에 $native_bin 이 없습니다. Homebrew 환경 설정을 먼저 확인하세요."
+  shadow=1
+fi
+if (( shadow )); then
+  print -u2 'npm/Corepack 등의 소유권을 확인해 docs/pnpm-migration.md 절차로 별도 정리하세요. 자동 삭제하지 않습니다.'
+  exit 1
+fi
 if [[ "$mode" != --apply ]]; then
-  [[ "$old_block" != "$new_block" ]] || print '현재 관리 블록은 이미 목표와 같습니다.'
-  print '진단만 완료했습니다. 적용하려면 같은 명령에 --apply를 추가하세요.'
+  print '진단 완료. --apply는 검증한 이전 formula의 링크를 전환하고, 자체 관리 블록만 제거합니다.'
   exit 0
 fi
-
 if ! (( $+commands[node] )); then
-  print -u2 'node가 없습니다. 먼저 update.sh로 Node.js를 준비한 뒤 다시 실행하세요.'
+  print -u2 'node가 없습니다. 먼저 update.sh로 Node.js를 준비하세요.'
   exit 127
 fi
 if ! installed_prefix="$(brew --prefix --installed "$formula" 2>/dev/null)"; then
-  brew install "$formula"
+  brew install --skip-link "$formula"
   installed_prefix="$(brew --prefix --installed "$formula")"
 fi
-[[ -x "$pnpm_bin/pnpm" && -x "$pnpm_bin/pnpx" ]] || { print -u2 '설치 후 pnpm/pnpx 실행 파일을 찾지 못했습니다.'; exit 1; }
 formula_root="${pnpm_bin:h:A}"
 [[ "${installed_prefix:A}" == "$formula_root" ]] || { print -u2 '설치 메타데이터와 대상 경로가 다릅니다.'; exit 1; }
 for executable in "$pnpm_bin/pnpm" "$pnpm_bin/pnpx"; do
-  [[ "${executable:A}" == "$formula_root"/* ]] || { print -u2 "대상 실행 파일이 formula 외부를 가리킵니다: $executable"; exit 1; }
+  [[ -x "$executable" && "${executable:A}" == "$formula_root"/* ]] || { print -u2 "목표 실행 파일이 없거나 formula 외부를 가리킵니다: $executable"; exit 1; }
 done
 version_dir="$(mktemp -d)"
-pnpm_version="$(cd "$version_dir"; PATH="$pnpm_bin:$PATH" "$pnpm_bin/pnpm" --version)"
+pnpm_version="$(cd "$version_dir"; "$pnpm_bin/pnpm" --version)"
 [[ "$pnpm_version" == "$PNPM_MAJOR".<->.<-> ]] || { print -u2 "목표 major와 다른 pnpm입니다: $pnpm_version"; exit 1; }
 print "검증된 pnpm: $pnpm_version"
-if [[ "$old_block" == "$new_block" ]]; then
-  print '관리 블록이 이미 적용되어 있습니다. 설정과 백업을 추가로 만들지 않았습니다.'
-  exit 0
-fi
 
-mkdir -p "${rc_target:h}"
-staged="$(mktemp "${rc_target}.shell-update-pnpm-stage.XXXXXX")"
-if [[ -f "$rc_target" ]]; then
+if [[ -n "$old_block" ]]; then
   backup="$(mktemp "${rc_target}.shell-update-pnpm.XXXXXX")"
   cp -p "$rc_target" "$backup"
-  print "백업: $backup"
-  print "복구: cp -p ${(q)backup} ${(q)rc_target}"
+  print "설정 백업: $backup"
+  staged="$(mktemp "${rc_target}.shell-update-pnpm-stage.XXXXXX")"
   cp -p "$backup" "$staged"
-  if [[ -n "$old_block" ]]; then
-    awk -v start="$marker_start" '$0 == start { exit } { print }' "$backup" > "$staged"
-    print -r -- "$new_block" >> "$staged"
-    awk -v end="$marker_end" 'after { print } $0 == end { after=1 }' "$backup" >> "$staged"
-  else
-    printf '\n%s\n' "$new_block" >> "$staged"
+  awk -v start="$marker_start" -v end="$marker_end" '$0 == start { inside=1; next } $0 == end { inside=0; next } !inside { print }' "$backup" > "$staged"
+fi
+if [[ "$owner" != "$formula" ]]; then
+  brew link --force --dry-run "$formula"
+  if [[ -n "$old_formula" ]]; then
+    old_unlinked=1
+    brew unlink "$old_formula"
   fi
-  cmp -s "$rc_target" "$backup" || { print -u2 '적용 중 설정 파일이 바뀌었습니다. 교체하지 않습니다.'; exit 1; }
-else
-  print -r -- "$new_block" > "$staged"
+  link_attempted=1
+  brew link --force "$formula"
 fi
-mv "$staged" "$rc_target"
-staged=''
-print "적용 완료: $rc_target"
-if [[ -z "$backup" ]]; then
-  print "복구: 추가 편집이 없다면 새 설정 파일을 제거하세요: rm ${(q)rc_target}"
+rehash
+for name in pnpm pnpx; do
+  executable="$native_bin/$name"
+  expected="$pnpm_bin/$name"
+  [[ -L "$executable" && -x "$executable" && "${executable:A}" == "${expected:A}" ]] || { print -u2 "Homebrew 링크 검증 실패: $executable"; exit 1; }
+  executable="$(whence -p "$name")"
+  [[ "${executable:A}" == "${expected:A}" ]] || { print -u2 "일반 PATH 검증 실패: $executable"; exit 1; }
+done
+if [[ -n "$staged" ]]; then
+  cmp -s "$rc_target" "$backup" || { print -u2 '적용 중 설정이 바뀌었습니다. 교체하지 않습니다.'; exit 1; }
+  rc_replaced=1
+  mv "$staged" "$rc_target"
+  staged=''
 fi
-print '새 zsh를 열고 whence -v pnpm, pnpm --version을 확인하세요. 기존 셸은 자동 변경하지 않습니다.'
-print 'nvm use 이후에도 pnpm/pnpx 함수가 대상 경로를 사용합니다. command pnpm 등 함수 우회는 보장 대상이 아닙니다.'
+completed=1
+print '전환 완료: Homebrew 일반 링크가 승인 formula를 가리킵니다. 새 셸 블록은 만들지 않았습니다.'
+print '새 zsh와 실제 Codex 환경에서 command pnpm 및 nvm 전환 후 경로를 확인하세요.'
+[[ -z "$old_formula" ]] || print "이전 formula는 설치 상태로 보존했습니다: $old_formula"
+[[ -z "$backup" ]] || print "이전 설정 복구 자료: $backup (native 링크 복구와 함께 사용)"

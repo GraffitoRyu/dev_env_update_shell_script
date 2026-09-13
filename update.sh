@@ -395,11 +395,30 @@ main() {
     done
     brew upgrade "$pnpm_formula"
 
-    local pnpm_path="$pnpm_prefix/bin/pnpm"
-    if [[ ! -x "$pnpm_path" || "${pnpm_path:A}" != "${pnpm_prefix:A}"/* ]]; then
-      echo "[ERROR] pnpm 실행 파일이 $pnpm_formula 설치 경로에 속하지 않습니다: $pnpm_path"
+    pnpm_prefix="$(brew --prefix --installed "$pnpm_formula")"
+    local brew_prefix="$(brew --prefix)"
+    local pnpm_command expected_path resolved_path
+    rehash
+    for pnpm_command in pnpm pnpx; do
+      expected_path="$pnpm_prefix/bin/$pnpm_command"
+      if [[ ! -x "$expected_path" || "${expected_path:A}" != "${pnpm_prefix:A}"/* ]]; then
+        echo "[ERROR] $pnpm_command 실행 파일이 $pnpm_formula 설치 경로에 속하지 않습니다: $expected_path"
+        return 1
+      fi
+      for resolved_path in "$brew_prefix/bin/$pnpm_command" "$(whence -p "$pnpm_command" || true)"; do
+        if [[ ! -x "$resolved_path" || "${resolved_path:A}" != "${expected_path:A}" ]]; then
+          echo "[ERROR] 전역 $pnpm_command 경로가 $pnpm_formula와 다릅니다: ${resolved_path:-not found}"
+          echo "- docs/pnpm-migration.md의 전환 절차로 링크와 PATH 충돌을 확인하세요."
+          return 1
+        fi
+      done
+    done
+    if (( IS_SOURCED && ( $+aliases[pnpm] || $+aliases[pnpx] || $+functions[pnpm] || $+functions[pnpx] ) )); then
+      echo "[ERROR] 현재 셸의 pnpm/pnpx alias·함수가 전역 실행 파일보다 우선합니다."
+      echo "- docs/pnpm-migration.md의 관리 블록 전환 절차를 확인하고 새 셸에서 다시 검증하세요."
       return 1
     fi
+    local pnpm_path="$pnpm_prefix/bin/pnpm"
     local pnpm_version
     pnpm_check_dir="$(mktemp -d "${TMPDIR:-/tmp}/pnpm-version.XXXXXX")"
     pnpm_version="$(cd "$pnpm_check_dir" && "$pnpm_path" --version)"

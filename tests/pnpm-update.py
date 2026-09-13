@@ -22,6 +22,8 @@ if name == 'brew':
     if args[:2] == ['--prefix', '--installed']:
         if mode == 'missing': sys.exit(1)
         print(root / 'pnpm')
+    elif args == ['--prefix']:
+        print(root)
     elif args == ['--prefix', 'nvm']:
         print(root / 'nvm')
     elif args == ['outdated', '--formula', '--quiet']:
@@ -54,13 +56,25 @@ def check(mode, manual=False):
         for name in ('update.sh', 'pnpm-policy.zsh'):
             shutil.copy(REPO / name, root / name)
         (root / 'project/package.json').write_text('{"packageManager":"pnpm@12.4.1"}')
-        for command, folder in [('brew', root / 'bin'), ('node', managed_bin), ('npm', managed_bin), ('pnpm', root / 'pnpm/bin')]:
+        for command, folder in [('brew', root / 'bin'), ('node', managed_bin), ('npm', managed_bin), ('pnpm', root / 'pnpm/bin'), ('pnpx', root / 'pnpm/bin')]:
             executable = folder / command
             executable.write_text(f'#!{sys.executable}\n' + MOCK)
             executable.chmod(0o755)
+        for name in ('pnpm', 'pnpx'):
+            (root / 'bin' / name).symlink_to(root / 'pnpm/bin' / name)
         if mode == 'external-path':
-            shutil.move(root / 'pnpm/bin/pnpm', root / 'bin/pnpm')
-            (root / 'pnpm/bin/pnpm').symlink_to(root / 'bin/pnpm')
+            shutil.move(root / 'pnpm/bin/pnpm', root / 'external-pnpm')
+            (root / 'pnpm/bin/pnpm').symlink_to(root / 'external-pnpm')
+        if mode in ('path-12', 'nvm-shadow', 'pnpx-shadow'):
+            shadow = managed_bin if mode != 'path-12' else root / 'shadow'
+            shadow.mkdir(exist_ok=True)
+            executable = shadow / ('pnpx' if mode == 'pnpx-shadow' else 'pnpm')
+            executable.write_text('#!/bin/zsh\nprint 12.4.1\n')
+            executable.chmod(0o755)
+        if mode == 'link-missing':
+            (root / 'bin/pnpm').unlink()
+        if mode == 'pnpx-not-executable':
+            (root / 'pnpm/bin/pnpx').chmod(0o644)
         (root / 'nvm/nvm.sh').write_text('''nvm() {
   case "$1" in
     ls-remote) print v24.21.0 ;;
@@ -71,9 +85,17 @@ def check(mode, manual=False):
 ''')
         env = dict(os.environ, TEST_DIR=str(root), HOME=str(root / 'home'),
                    MODE=mode, SHELL_UPDATE_AUTO='0', PATH=f'{root / "bin"}:/usr/bin:/bin')
+        if mode == 'path-12':
+            env['PATH'] = f'{root / "shadow"}:' + env['PATH']
+        if mode == 'link-missing':
+            env['PATH'] = f'{root / "pnpm/bin"}:' + env['PATH']
         master, slave = pty.openpty()
         try:
             command = ['zsh', '-c', 'source "$TEST_DIR/update.sh" manual'] if manual else ['zsh', str(root / 'update.sh'), '--auto']
+            if mode == 'sourced-function':
+                command = ['zsh', '-c', 'function pnpm { print UNVERIFIED_FUNCTION; }; source "$TEST_DIR/update.sh" --auto']
+            if mode == 'sourced-alias':
+                command = ['zsh', '-c', "alias pnpm='print UNVERIFIED_ALIAS'; source \"$TEST_DIR/update.sh\" --auto"]
             result = subprocess.run(command, env=env, cwd=root / 'project',
                                     stdin=slave if manual else subprocess.DEVNULL,
                                     text=True, capture_output=True, timeout=15)
@@ -85,7 +107,8 @@ def check(mode, manual=False):
         assert ['upgrade'] not in brew_calls and ['upgrade', '--formula'] not in brew_calls, brew_calls
         assert not any(args[:1] == ['upgrade'] and any(a.startswith('pnpm') and a != 'pnpm@11' for a in args) for args in brew_calls), brew_calls
         failures = {'missing': 1, 'pinned': 1, 'upgrade-failure': 23, 'wrong-major': 1,
-                    'external-path': 1, 'version-failure': 17, 'outdated-failure': 29}
+                    'external-path': 1, 'version-failure': 17, 'outdated-failure': 29,
+                    'path-12': 1, 'nvm-shadow': 1, 'pnpx-shadow': 1, 'link-missing': 1, 'pnpx-not-executable': 1, 'sourced-function': 1, 'sourced-alias': 1}
         assert result.returncode == failures.get(mode, 0), (mode, result.returncode, result.stdout, result.stderr)
         if mode not in failures:
             assert brew_calls.count(['upgrade', 'pnpm@11']) == 1, brew_calls
@@ -102,11 +125,14 @@ def check(mode, manual=False):
             assert (['upgrade', '--formula', 'wget', 'local/tools/tool'] in brew_calls) == (mode == 'mixed')
         elif not manual:
             assert not any(args[:1] == ['outdated'] or args == ['upgrade', '--cask'] for args in brew_calls)
+        if mode in ('sourced-function', 'sourced-alias'):
+            assert '[ERROR]' in result.stdout and 'UNVERIFIED_' not in result.stdout, result.stdout
         print(f'PASS: {"manual" if manual else "auto"} {mode}')
 
 
 if __name__ == '__main__':
-    for scenario in ('success', 'missing', 'pinned', 'upgrade-failure', 'wrong-major', 'external-path', 'version-failure'):
+    for scenario in ('success', 'missing', 'pinned', 'upgrade-failure', 'wrong-major', 'external-path', 'version-failure',
+                     'path-12', 'nvm-shadow', 'pnpx-shadow', 'link-missing', 'pnpx-not-executable', 'sourced-function', 'sourced-alias'):
         check(scenario)
     for scenario in ('mixed', 'only-pnpm', 'empty', 'outdated-failure'):
         check(scenario, manual=True)

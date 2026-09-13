@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Run with python3 tests/pnpm-migration.py. All package commands and homes are mocked."""
+"""Native-link migration checks; all homes, formulae and commands are isolated mocks."""
 import os
+import fcntl
 from pathlib import Path
 import shutil
 import subprocess
@@ -8,32 +9,66 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[1]
 BREW = r'''#!/usr/bin/python3
-import os, pathlib, sys
+import os, pathlib, signal, sys
 root = pathlib.Path(os.environ['TEST_ROOT'])
-with (root / 'brew-calls').open('a') as log:
-    log.write(' '.join(sys.argv[1:]) + '\n')
-args = sys.argv[1:]
 prefix = root / 'brew prefix'
+args = sys.argv[1:]
+with (root / 'brew-calls').open('a') as log: log.write(' '.join(args) + '\n')
+
+def installed(name):
+    return (prefix / 'opt' / name / '.installed').is_file()
+
 if args == ['--prefix']:
     print(prefix)
-elif args == ['--prefix', '--installed', 'pnpm@11']:
-    if not (root / 'installed').exists(): sys.exit(1)
-    print(prefix / 'opt/pnpm@11')
+elif args[:2] == ['--prefix', '--installed']:
+    if not installed(args[2]): sys.exit(1)
+    print(prefix / 'opt' / args[2])
 elif args == ['list', '--versions']:
-    print('pnpm 12.0.0')
-    if (prefix / 'opt/pnpm@11/bin/pnpm').exists(): print('pnpm@11 11.26.0')
+    for name in ('pnpm', 'pnpm@11'):
+        if installed(name): print(name, '12.4.1' if name == 'pnpm' else '11.26.0')
 elif args == ['list', '--pinned']:
-    print('pnpm')
-elif args == ['install', 'pnpm@11']:
+    pass
+elif args in (['install', 'pnpm@11'], ['install', '--skip-link', 'pnpm@11']):
     if os.environ.get('FAIL_INSTALL'): sys.exit(23)
-    target = prefix / 'opt/pnpm@11/bin'
-    target.mkdir(parents=True, exist_ok=True)
+    target = prefix / 'Cellar/pnpm@11/11.26.0'
+    (target / 'bin').mkdir(parents=True, exist_ok=True)
+    (target / '.installed').touch()
     for name in ('pnpm', 'pnpx'):
-        shutil_source = root / 'pnpm-template'
-        out = target / name
-        out.write_bytes(shutil_source.read_bytes())
-        out.chmod(0o755)
-    (root / 'installed').touch()
+        binary = target / 'bin' / name
+        binary.write_bytes((root / 'pnpm-template').read_bytes())
+        binary.chmod(0o755)
+    (prefix / 'opt/pnpm@11').symlink_to(target)
+    if '--skip-link' not in args:
+        for name in ('pnpm', 'pnpx'):
+            binary = prefix / 'bin' / name
+            if not binary.exists(): binary.symlink_to(target / 'bin' / name)
+    if os.environ.get('ESCAPE_TARGET'):
+        binary = target / 'bin/pnpm'
+        binary.unlink()
+        binary.symlink_to(root / 'outside-pnpm')
+    if os.environ.get('PARTIAL_INSTALL'): sys.exit(24)
+elif args[0] == 'unlink':
+    target = (prefix / 'opt' / args[1]).resolve()
+    for name in ('pnpm', 'pnpx'):
+        binary = prefix / 'bin' / name
+        if binary.is_symlink() and target in binary.resolve().parents: binary.unlink()
+elif args[:2] == ['link', '--force']:
+    if '--dry-run' in args: sys.exit(0)
+    name = args[-1]
+    if name == 'pnpm' and os.environ.get('FAIL_ROLLBACK'): sys.exit(33)
+    for index, binary_name in enumerate(('pnpm', 'pnpx')):
+        binary = prefix / 'bin' / binary_name
+        target = prefix / 'opt' / name / 'bin' / binary_name
+        if name == 'pnpm@11' and binary_name == 'pnpm' and os.environ.get('CROSSWIRE_LINK'):
+            target = prefix / 'opt' / name / 'bin/pnpx'
+        if binary.exists() or binary.is_symlink(): sys.exit(17)
+        binary.symlink_to(target)
+        if name == 'pnpm@11' and index == 0:
+            if os.environ.get('FAIL_LINK'): sys.exit(31)
+            if os.environ.get('SIGNAL_LINK'):
+                os.kill(os.getppid(), getattr(signal, 'SIG' + os.environ['SIGNAL_LINK']))
+    if os.environ.get('EDIT_RC') and name == 'pnpm@11':
+        with pathlib.Path(os.environ['RC_TARGET']).open('a') as out: out.write('# concurrent edit\n')
 else:
     sys.exit('unexpected brew call: ' + repr(args))
 '''
@@ -42,11 +77,24 @@ print "$0 $*" >> "$TEST_ROOT/pnpm-calls"
 if [[ "$1" == --version ]]; then
   [[ ! -f package.json ]] || exit 98
   print "${TARGET_VERSION:-11.26.0}"
-elif [[ "$1" == child ]]; then
-  /bin/zsh -fc 'command -v pnpm'
 else
   print "target:$*"
 fi
+'''
+LEGACY = r'''# >>> shell-update pnpm >>>
+# bin: $RAW_BIN
+if (( ${+aliases[pnpm]} || ${+aliases[pnpx]} )) ||
+   { (( ${+functions[pnpm]} )) && [[ "${functions[pnpm]}" != "${_shell_update_pnpm_function-}" ]]; } ||
+   { (( ${+functions[pnpx]} )) && [[ "${functions[pnpx]}" != "${_shell_update_pnpx_function-}" ]]; }; then
+  print -u2 '[shell-update] 기존 pnpm/pnpx alias 또는 함수가 있어 전환을 건너뜁니다.'
+else
+  export PATH=$BIN:"$PATH"
+  function pnpm { PATH=$BIN:"$PATH" command $BIN/pnpm "$@"; }
+  function pnpx { PATH=$BIN:"$PATH" command $BIN/pnpx "$@"; }
+  typeset -g _shell_update_pnpm_function="${functions[pnpm]}"
+  typeset -g _shell_update_pnpx_function="${functions[pnpx]}"
+fi
+# <<< shell-update pnpm <<<
 '''
 
 
@@ -57,17 +105,29 @@ def setup(root):
     for name in ('migrate-pnpm.zsh', 'pnpm-policy.zsh'):
         shutil.copy2(REPO / name, repo / name)
     home = root / 'home'
-    home.mkdir()
     zdir = root / 'zsh config'
-    zdir.mkdir()
     fake = root / 'bin'
-    fake.mkdir()
+    prefix = root / 'brew prefix'
+    for directory in (home, zdir, fake, prefix / 'bin', prefix / 'opt'):
+        directory.mkdir(parents=True, exist_ok=True)
+    for version in ('v24.18.0', 'v24.21.0'):
+        directory = home / '.nvm/versions/node' / version / 'bin'
+        directory.mkdir(parents=True)
+        (directory / 'node').write_text('#!/bin/zsh\nprint v24.21.0\n')
+        (directory / 'node').chmod(0o755)
+    old = prefix / 'Cellar/pnpm/12.4.1'
+    (old / 'bin').mkdir(parents=True)
+    (old / '.installed').touch()
+    (prefix / 'opt/pnpm').symlink_to(old)
+    for name in ('pnpm', 'pnpx'):
+        (old / 'bin' / name).write_text('#!/bin/zsh\nprint OLD_EXECUTED >> "$TEST_ROOT/old-executed"\nprint 12.4.1\n')
+        (old / 'bin' / name).chmod(0o755)
+        (prefix / 'bin' / name).symlink_to(old / 'bin' / name)
     (fake / 'brew').write_text(BREW)
-    (fake / 'node').write_text('#!/bin/zsh\nprint v24.21.0\n')
-    (fake / 'pnpm').write_text('#!/bin/zsh\nprint OLD_PNPM_EXECUTED >> "$TEST_ROOT/old-executed"\n')
-    for file in fake.iterdir(): file.chmod(0o755)
+    (fake / 'brew').chmod(0o755)
     (root / 'pnpm-template').write_text(PNPM)
-    env = os.environ | {'HOME': str(home), 'ZDOTDIR': str(zdir), 'PATH': f'{fake}:/usr/bin:/bin',
+    env = os.environ | {'HOME': str(home), 'ZDOTDIR': str(zdir), 'NVM_DIR': str(home / '.nvm'),
+                        'PATH': f'{fake}:{home}/.nvm/versions/node/v24.21.0/bin:{prefix}/bin:/usr/bin:/bin',
                         'TEST_ROOT': str(root), 'HOMEBREW_NO_AUTO_UPDATE': '1'}
     return repo, zdir / '.zshrc', env
 
@@ -77,143 +137,161 @@ def run(repo, env, *args):
                           text=True, capture_output=True, timeout=10)
 
 
+def legacy(root):
+    raw = str(root / 'brew prefix/opt/pnpm@11/bin')
+    return LEGACY.replace('$RAW_BIN', raw).replace('$BIN', raw.replace(' ', r'\ '))
+
+
+def owner(root):
+    return (root / 'brew prefix/bin/pnpm').resolve()
+
+
 def main():
-    with tempfile.TemporaryDirectory(prefix='pnpm-migration-test-') as directory:
+    with tempfile.TemporaryDirectory(prefix='pnpm-native-test-') as directory:
         root = Path(directory)
         repo, rc, env = setup(root)
-        original = '# keep user settings\nexport USER_SETTING=kept\n'
-        rc.write_text(original)
-        result = run(repo, env)
-        assert result.returncode == 0, result.stderr
-        assert rc.read_text() == original
-        assert not list(rc.parent.glob('.zshrc.shell-update-pnpm.*'))
-        assert not (root / 'old-executed').exists()
-        assert 'install ' not in (root / 'brew-calls').read_text()
-
-        result = run(repo, env | {'FAIL_INSTALL': '1'}, '--apply')
-        assert result.returncode == 23, (result.stdout, result.stderr)
-        assert rc.read_text() == original
-        assert not list(rc.parent.glob('.zshrc.shell-update-pnpm.*'))
-
-        result = run(repo, env, '--apply')
-        assert result.returncode == 0, (result.stdout, result.stderr)
-        backups = list(rc.parent.glob('.zshrc.shell-update-pnpm.*'))
-        assert len(backups) == 1 and backups[0].read_text() == original
-        applied = rc.read_text()
-        assert applied.startswith(original)
-        assert applied.count('# >>> shell-update pnpm >>>') == 1
-        calls_before = (root / 'brew-calls').read_text().count('install pnpm@11')
-        result = run(repo, env, '--apply')
-        assert result.returncode == 0, result.stderr
-        assert rc.read_text() == applied
-        assert list(rc.parent.glob('.zshrc.shell-update-pnpm.*')) == backups
-        assert (root / 'brew-calls').read_text().count('install pnpm@11') == calls_before
-        assert not (root / 'old-executed').exists()
-
-        # Only the isolated mock rc is sourced. nvm-style PATH changes must not replace pnpm.
-        code = '''source "$ZDOTDIR/.zshrc"
-source "$ZDOTDIR/.zshrc"
-function nvm { export PATH="$TEST_ROOT/bin:$PATH"; }
-nvm use 24
-pnpm --version
-pnpm child
-pnpx hello
-[[ "$USER_SETTING" == kept ]]
-'''
-        shell = subprocess.run(['/bin/zsh', '-fc', code], env=env, capture_output=True, text=True, timeout=10)
-        assert shell.returncode == 0, shell.stderr
-        assert '건너뜁니다' not in shell.stderr, shell.stderr
-        assert '11.26.0' in shell.stdout and 'target:hello' in shell.stdout
-        assert str(root / 'brew prefix/opt/pnpm@11/bin/pnpm') in shell.stdout
-        assert not (root / 'old-executed').exists()
-
-        # Runtime aliases loaded indirectly must be preserved without parser errors.
-        alias_file = root / 'plugin.zsh'
-        alias_file.write_text("alias pnpm='print USER_ALIAS'\n")
-        rc.write_text(f'source "{alias_file}"\n' + applied)
-        result = run(repo, env, '--apply')
-        assert result.returncode == 0, result.stderr
-        shell = subprocess.run(['/bin/zsh', '-fc', 'source "$ZDOTDIR/.zshrc"; alias pnpm'],
-                               env=env, capture_output=True, text=True, timeout=10)
-        assert shell.returncode == 0, shell.stderr
-        assert '건너뜁니다' in shell.stderr and 'USER_ALIAS' in shell.stdout
-
-        # Explicit definitions, edited blocks, and wrong-major installs are not overwritten.
-        for content in ("alias pnpm='corepack pnpm'\n", 'function pnpx { print custom; }\n',
-                        applied.replace('else\n', 'else # user edit\n', 1)):
-            rc.write_text(content)
-            result = run(repo, env, '--apply')
-            assert result.returncode != 0
-            assert rc.read_text() == content
-        rc.write_text(original)
-        result = run(repo, env | {'TARGET_VERSION': '12.0.0'}, '--apply')
-        assert result.returncode != 0 and rc.read_text() == original
-
-        # Never execute pnpm or pnpx links escaping the installed formula root.
-        for name in ('pnpm', 'pnpx'):
-            binary = root / 'brew prefix/opt/pnpm@11/bin' / name
-            binary.unlink()
-            binary.symlink_to(root / 'bin/pnpm')
-            result = run(repo, env, '--apply')
-            assert result.returncode != 0 and rc.read_text() == original
-            assert not (root / 'old-executed').exists()
-            binary.unlink()
-            shutil.copy2(root / 'pnpm-template', binary)
-            binary.chmod(0o755)
-
-        # Stale files without Homebrew installation metadata are not treated as installed.
-        (root / 'installed').unlink()
-        calls_before = (root / 'brew-calls').read_text().count('install pnpm@11')
-        result = run(repo, env, '--apply')
-        assert result.returncode == 0, result.stderr
-        assert (root / 'brew-calls').read_text().count('install pnpm@11') == calls_before + 1
-
-        # An unchanged tool-owned block from an earlier policy can be replaced safely.
-        rc.write_text(applied.replace('pnpm@11', 'pnpm@10'))
-        result = run(repo, env, '--apply')
-        assert result.returncode == 0, result.stderr
-        assert rc.read_text().count('# >>> shell-update pnpm >>>') == 1
-        assert 'pnpm@10' not in rc.read_text()
-
-        # A manually approved major change replaces one managed block and preserves both sides.
-        suffix = '\n# settings after the managed block\nexport AFTER_SETTING=kept\n'
-        rc.write_text(applied + suffix)
-        (repo / 'pnpm-policy.zsh').write_text('PNPM_MAJOR=12\n')
-        (root / 'bin/brew').write_text(BREW.replace('pnpm@11', 'pnpm@12'))
-        (root / 'installed').unlink()
-        result = run(repo, env | {'TARGET_VERSION': '12.0.0'}, '--apply')
-        assert result.returncode == 0, (result.stdout, result.stderr)
-        changed = rc.read_text()
-        assert changed.startswith(original) and changed.endswith(suffix)
-        assert changed.count('# >>> shell-update pnpm >>>') == 1
-        assert 'pnpm@12' in changed and 'pnpm@11' not in changed
-        print('PASS: diagnosis, failure preservation, repeat apply, nvm PATH, aliases, and conflicts')
-
-    with tempfile.TemporaryDirectory(prefix='pnpm-migration-test-') as directory:
-        root = Path(directory)
-        repo, rc, env = setup(root)
-        target = root / 'dotfiles' / 'zshrc'
+        original = '# before\n' + legacy(root) + '# after\n'
+        target = root / 'dotfiles/zshrc'
         target.parent.mkdir()
-        target.write_text('# original symlink target\n')
+        target.write_text(original)
         rc.symlink_to(target)
+        result = run(repo, env)
+        assert result.returncode == 0, result.stderr
+        assert target.read_text() == original and not (root / 'old-executed').exists()
+        assert not list(target.parent.glob('*.shell-update-pnpm.*'))
+        assert not (repo / 'logs').exists()
+        assert 'install ' not in (root / 'brew-calls').read_text()
         result = run(repo, env, '--apply')
         assert result.returncode == 0, (result.stdout, result.stderr)
-        assert rc.is_symlink() and rc.resolve() == target.resolve()
-        assert '# >>> shell-update pnpm >>>' in target.read_text()
-        backups = list(target.parent.glob('zshrc.shell-update-pnpm.*'))
-        assert len(backups) == 1 and backups[0].read_text() == '# original symlink target\n'
-        print('PASS: symlink target backup, symlink preservation, and paths with spaces')
+        assert '/pnpm@11/' in str(owner(root))
+        assert rc.is_symlink() and target.read_text() == '# before\n# after\n'
+        backups = list(target.parent.glob('*.shell-update-pnpm.*'))
+        assert len(backups) == 1 and backups[0].read_text() == original
+        assert (root / 'brew prefix/Cellar/pnpm/12.4.1/bin/pnpm').exists()
+        before = (root / 'brew-calls').read_text()
+        result = run(repo, env, '--apply')
+        assert result.returncode == 0, result.stderr
+        extra = (root / 'brew-calls').read_text()[len(before):]
+        assert not any(command in extra for command in ('install ', 'link ', 'unlink '))
+        assert list(target.parent.glob('*.shell-update-pnpm.*')) == backups
+        for version in ('v24.18.0', 'v24.21.0'):
+            shell = subprocess.run(['/bin/zsh', '-fc', '''export PATH="$NVM_DIR/versions/node/$1/bin:$PATH"
+command pnpm --version
+/bin/zsh -fc 'command pnpm --version'
+command pnpx hello
+''', 'zsh', version], env=env, cwd=root, capture_output=True, text=True, timeout=10)
+            assert shell.returncode == 0 and shell.stdout.count('11.26.0') == 2, shell.stderr
+        assert not (root / 'old-executed').exists()
+        print('PASS: native links, legacy removal, symlink backup, old PATH, two nvm versions, repeat apply')
 
-    with tempfile.TemporaryDirectory(prefix='pnpm-migration-test-') as directory:
+    for failure, code in [('FAIL_INSTALL', 23), ('FAIL_LINK', 31), ('SIGNAL_LINK', 143), ('EDIT_RC', 1), ('CROSSWIRE_LINK', 1)]:
+        with tempfile.TemporaryDirectory(prefix='pnpm-native-test-') as directory:
+            root = Path(directory)
+            repo, rc, env = setup(root)
+            original = '# before\n' + legacy(root) + '# after\n'
+            rc.write_text(original)
+            value = 'TERM' if failure == 'SIGNAL_LINK' else '1'
+            result = run(repo, env | {failure: value, 'RC_TARGET': str(rc)}, '--apply')
+            assert result.returncode == code, (failure, result.returncode, result.stdout, result.stderr)
+            for name in ('pnpm', 'pnpx'):
+                assert '/pnpm/12.4.1/' in str((root / 'brew prefix/bin' / name).resolve())
+            assert rc.read_text() == original + ('# concurrent edit\n' if failure == 'EDIT_RC' else '')
+        print('PASS:', failure, 'preserves original links and config')
+
+    for conflict in ('nvm', 'path', 'unknown-native', 'crosswired', 'edited-block', 'alias', 'missing-path'):
+        with tempfile.TemporaryDirectory(prefix='pnpm-native-test-') as directory:
+            root = Path(directory)
+            repo, rc, env = setup(root)
+            rc.write_text('# user config\n')
+            if conflict == 'nvm':
+                (root / 'home/.nvm/versions/node/v24.18.0/bin/pnpm').symlink_to(root / 'brew prefix/bin/pnpm')
+            elif conflict == 'path':
+                env['PATH'] = str(root / 'brew prefix/opt/pnpm/bin') + ':' + env['PATH']
+            elif conflict == 'unknown-native':
+                binary = root / 'brew prefix/bin/pnpm'
+                binary.unlink()
+                binary.write_text('unowned file')
+            elif conflict == 'crosswired':
+                binary = root / 'brew prefix/bin/pnpm'
+                binary.unlink()
+                binary.symlink_to(root / 'brew prefix/opt/pnpm/bin/pnpx')
+            elif conflict == 'edited-block':
+                rc.write_text(legacy(root).replace('else\n', 'else # edited\n'))
+            elif conflict == 'alias':
+                rc.write_text("alias pnpm='corepack pnpm'\n")
+            else:
+                env['PATH'] = env['PATH'].replace(str(root / 'brew prefix/bin') + ':', '')
+            original = rc.read_text()
+            result = run(repo, env, '--apply')
+            assert result.returncode != 0, conflict
+            assert rc.read_text() == original
+            calls = (root / 'brew-calls').read_text()
+            assert not any(command in calls for command in ('install ', 'link ', 'unlink ')), calls
+        print('PASS: preflight blocks', conflict)
+
+    with tempfile.TemporaryDirectory(prefix='pnpm-native-test-') as directory:
         root = Path(directory)
         repo, rc, env = setup(root)
-        result = run(repo, env)
-        assert result.returncode == 0 and not rc.exists()
+        result = run(repo, env | {'FAIL_LINK': '1', 'FAIL_ROLLBACK': '1'}, '--apply')
+        assert result.returncode != 0 and '부분 적용' in result.stderr
+        assert not rc.exists()
+        print('PASS: rollback failure is reported as partial application')
+
+    with tempfile.TemporaryDirectory(prefix='pnpm-native-test-') as directory:
+        root = Path(directory)
+        repo, rc, env = setup(root)
         result = run(repo, env, '--apply')
-        assert result.returncode == 0, (result.stdout, result.stderr)
-        assert rc.read_text().count('# >>> shell-update pnpm >>>') == 1
-        assert not list(rc.parent.glob('.zshrc.shell-update-pnpm.*'))
-        print('PASS: missing shell config diagnosis and first apply')
+        assert result.returncode == 0 and not rc.exists(), result.stderr
+        env['PATH'] = str(root / 'brew prefix/opt/pnpm@11/bin') + ':' + env['PATH']
+        result = run(repo, env, '--apply')
+        assert result.returncode == 0, result.stderr
+        print('PASS: no new rc and approved opt path remains valid')
+
+    with tempfile.TemporaryDirectory(prefix='pnpm-native-test-') as directory:
+        root = Path(directory)
+        repo, rc, env = setup(root)
+        log_dir = repo / 'logs'
+        log_dir.mkdir()
+        with (log_dir / '.update.flock').open('w') as lock:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            assert run(repo, env).returncode == 0
+            result = run(repo, env, '--apply')
+            assert result.returncode == 75, (result.returncode, result.stderr)
+            assert '/pnpm/12.4.1/' in str(owner(root))
+        legacy_lock = log_dir / '.update.lock'
+        legacy_lock.mkdir()
+        (legacy_lock / 'pid').write_text(str(os.getpid()))
+        result = run(repo, env, '--apply')
+        assert result.returncode == 75, result.stderr
+        (legacy_lock / 'pid').unlink()
+        result = run(repo, env, '--apply')
+        assert result.returncode == 0, result.stderr
+        assert not rc.exists()
+        print('PASS: shared updater lock, legacy PID protection, and release')
+
+    for failure, value in (('TARGET_VERSION', '12.0.0'), ('ESCAPE_TARGET', '1'), ('PARTIAL_INSTALL', '1')):
+        with tempfile.TemporaryDirectory(prefix='pnpm-native-test-') as directory:
+            root = Path(directory)
+            repo, rc, env = setup(root)
+            prefix = root / 'brew prefix'
+            for name in ('pnpm', 'pnpx'):
+                (prefix / 'bin' / name).unlink()
+            (prefix / 'opt/pnpm').unlink()
+            shutil.rmtree(prefix / 'Cellar/pnpm')
+            (root / 'outside-pnpm').write_text(PNPM)
+            (root / 'outside-pnpm').chmod(0o755)
+            rc.write_text('# untouched fresh-Mac config\n')
+            result = run(repo, env | {failure: value}, '--apply')
+            assert result.returncode != 0, (failure, result.stdout, result.stderr)
+            for name in ('pnpm', 'pnpx'):
+                assert not (prefix / 'bin' / name).exists()
+                assert not (prefix / 'bin' / name).is_symlink()
+            assert rc.read_text() == '# untouched fresh-Mac config\n'
+            assert not list(rc.parent.glob('*.shell-update-pnpm.*'))
+            assert 'install --skip-link pnpm@11' in (root / 'brew-calls').read_text()
+            if failure != 'TARGET_VERSION':
+                assert not (root / 'pnpm-calls').exists()
+        print('PASS: fresh Mac', failure, 'leaves no native links or config changes')
 
 
 if __name__ == '__main__':
