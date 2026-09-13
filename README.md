@@ -42,7 +42,11 @@ Node.js는 `update.sh`의 `NODE_LTS_VERSION=24`, pnpm은 `pnpm-policy.zsh`의 `P
 
 pnpm은 `pnpm@11`처럼 버전이 명시된 Homebrew formula로만 관리한다. 일반 `pnpm`과 다른 pnpm 계열은 이 도구의 전체 업그레이드 대상에서 제외하며, 자동 삭제하거나 pin을 해제하지 않는다. 승인 계열이 미설치이거나 pin으로 업데이트가 막히면 성공으로 처리하지 않는다.
 
-다른 Mac의 첫 설치·기존 npm/Corepack/pnpm 전환은 [pnpm 전환 절차](docs/pnpm-migration.md)를 따른다. `update.sh`는 승인 계열의 절대경로를 사용하며 평소 셸 설정까지 변경하지 않는다. 셸의 지속적인 전환은 별도 전환 도구의 명시적인 적용 단계에서 수행한다.
+다른 Mac의 첫 설치·기존 npm/Corepack/pnpm 전환은 [pnpm 전환 절차](docs/pnpm-migration.md)를 따른다. 전환 도구는 승인 후 Homebrew의 일반 `bin/pnpm`·`bin/pnpx` 링크를 승인 계열로 연결한다. 이전 도구가 만든 셸 함수 블록은 백업 후 제거한다. npm/Corepack 중복 설치는 소유자를 확인하여 별도 승인된 절차로 정리한다.
+
+`update.sh`는 승인 계열의 절대경로뿐 아니라 일반 PATH의 pnpm·pnpx가 같은 설치본을 선택하는지도 확인한다. 다른 설치본이 선택되면 전환 안내와 함께 실패하며, 셸 설정이나 링크를 임의로 복구하지 않는다.
+
+전역 기본과 프로젝트 버전은 구분한다. 프로젝트에 `packageManager` 또는 `devEngines.packageManager`가 지정되어 있으면 pnpm의 내장 버전 선택을 사용한다. `engines.pnpm`은 호환 범위 검사다. 프로젝트 밖 전역 기본은 승인 계열이며, 모든 Mac의 패치 버전까지 항상 같다는 보장은 아니다. Mac별 실행 경로·버전 비교와 Codex에서의 검증 방법은 전환 문서를 따른다.
 
 Node.js가 현재 셸에서 비활성이거나 nvm 기본 alias가 깨진 경우에도 최신 LTS를 설치·활성화한 뒤 기본 버전을 복구한다. 다른 경로의 Node.js가 같은 버전이어도 nvm 관리 경로로 활성화하고, node와 npm이 해당 설치에 속하는지 확인한다. 기존 Node.js 설치를 삭제하거나 글로벌 패키지를 이관하지 않는다. NVM은 스크립트의 엄격한 zsh 오류 옵션과 분리해서 실행한다.
 
@@ -132,4 +136,12 @@ python3 tests/pnpm-migration.py
 python3 tests/cask-audit.py
 ```
 
-종료·동시 실행, 관리 경로·실패 전파, pnpm 승인 계열과 셸 전환, 감사 실패 시 보고서 보존과 CSV 문자열 보존을 확인한다. 실제 업데이트 실행과는 별도의 검증이다.
+종료·동시 실행, 관리 경로·실패 전파, pnpm 승인 계열·Homebrew 링크 전환·복구·독립 프로세스, 감사 실패 시 보고서 보존과 CSV 문자열 보존을 확인한다. 실제 업데이트 실행과는 별도의 검증이다.
+
+`tests/pnpm-resolution.py`는 이미 있는 pnpm 11 배포본과 다른 버전의 캐시를 명시적으로 받아 실제 프로젝트 버전 선택을 검사한다. 원본을 임시 디렉터리에 복사하고 네트워크를 차단한다. 입력이 없으면 `SKIP`이며 실제 엔진 검증 성공으로 취급하지 않는다.
+
+```zsh
+python3 tests/pnpm-resolution.py --help
+```
+
+전체 검증에는 `--entry`(pnpm 11의 `dist/pnpm.mjs`), `--target-gvs`(다른 버전의 `node_modules/pnpm`을 포함하는 GVS 디렉터리), `--env-lockfile`(해당 버전이 기록된 환경 lockfile), `--metadata-dir`(기존 registry.npmjs.org 메타데이터 디렉터리)을 전달한다. 캐시가 없는 Mac에서는 테스트를 위해 실제 패키지를 자동 설치하지 않는다. 문서의 승인된 실기 프로젝트 검증으로 보완한다.
